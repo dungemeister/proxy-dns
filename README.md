@@ -86,10 +86,11 @@ To rebuild project use:
 # WARNINGS
 - Handling queries in single thread
 - Necessary fields in config file: 'local-dns:', 'upstream-dns:', 'blacklist:'
+- Broken trim_whitespaces function
 
 # ERRATA
 - Segfault with broken config
-- Answer with desired IP from blacklist is broken    
+- Answer with desired IP from blacklist is broken  
 
 # TODO
 - Update config file and parsing for future features
