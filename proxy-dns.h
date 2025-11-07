@@ -149,6 +149,10 @@ static void add_domain_to_blacklist(DomainList_t* blacklist, char* domain, Black
         fprintf(stderr, "Failed to add domain %s. Overflow\n", domain);
         return;
     }
+    if(domain == NULL) {
+        fprintf(stderr, "WARNING: domain name is %s\n", domain);
+        return;
+    }
     strcpy(blacklist->domains[blacklist->size].name, domain);
     blacklist->domains[blacklist->size++].type = type;
 }
@@ -164,6 +168,7 @@ static bool is_domain_blacklisted(DomainList_t* blacklist, char* domain){
 
 static void trim_whitespace(char *str) {
     char *end;
+    if(str == NULL) return;
     // Remove spaces from beginning
     while(isspace((unsigned char)*str)) str++;
     if(*str == 0) return;
@@ -192,6 +197,8 @@ static unsigned int ip_to_uint32(const char* ip_address_str) {
 }
 
 static BlacklistDomainType_t get_domain_type_from_string(char* type){
+    if(type == NULL) return BLACKLIST_DOMAIN_TYPE_NOT_BLACKLISTED;
+
     if(strstr(type, BLACKLIST_TYPE_REFUSE_CHAR) != NULL){
         return BLACKLIST_DOMAIN_TYPE_REFUSED;
     }
@@ -239,18 +246,26 @@ static int parse_config_file(DnsServer_t* server, const char* config_file){
             }
             else if(strstr(token, "blacklist:") != NULL)
             {
-                token = strtok(NULL, ",");
-                while (token != NULL){
-                    trim_whitespace(token);
-                    char* params = strtok(NULL, "-");
-                    trim_whitespace(params);
-                    char* hostname = params;
-                    trim_whitespace(hostname);
-                    params = strtok(NULL, " -");
-                    BlacklistDomainType_t type = get_domain_type_from_string(params);
-                    add_domain_to_blacklist(&server->conf.blacklist, token, type);
-                    printf("Added to blacklist: %s\n", token);
-                    token = strtok(NULL, ",");
+                char* tokens[MAX_BLACKLIST_DOMAINS];
+                int size = 0;
+                while(token != NULL && size < MAX_BLACKLIST_DOMAINS){
+                    token = strtok(NULL, " \t");
+                    if(token){
+                        tokens[size] = token;
+                        token = tokens[size];
+                        printf("%s\n", tokens[size]);
+                        size++;
+                    }
+                }
+                for(int i = 0; i < size; i++){
+                                        
+                    char *domain = strtok(tokens[i], "-");
+                    char *action_or_ip = strtok(NULL, "-");
+
+                    BlacklistDomainType_t type = get_domain_type_from_string(action_or_ip);
+                    add_domain_to_blacklist(&server->conf.blacklist, domain, type);
+                    printf("Added to blacklist: %s-%s\n", domain, action_or_ip);
+
                 }
             }
             else if(strstr(token, "local-dns:") != NULL)
