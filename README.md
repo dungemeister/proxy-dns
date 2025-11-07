@@ -114,6 +114,8 @@ Tested with util dig (DNS lookup utility)
 6. Not existed upstream DNS:
 
 
+7. Correct queries with huge blacklist:
+
 
 # WARNINGS
 - Handling queries in single thread
@@ -125,8 +127,11 @@ Tested with util dig (DNS lookup utility)
 - Answer with desired IP from blacklist is broken  
 
 # TODO
-- Update config file and parsing for future features
-- Add POSIX threads to handle simultaneous connections
-- Unit tests
-- Add default params for proxy server
-- Add signals handling for app
+- [ ] Update config file and parsing for future features
+- [ ] Add POSIX threads to handle simultaneous connections
+- [ ] Unit tests
+- [ ] Add default params for proxy server
+- [ ] Add signals handling for app
+- [ ] Add checking to the same domains in blacklist
+- [ ] Add cache for requested domains
+- [x] Add programm args parsing
