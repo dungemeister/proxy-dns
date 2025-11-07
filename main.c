@@ -4,7 +4,7 @@
 #define ARG_SHIFT(argc, arg) (--(*(argc)) > 0 ? ((arg)++)[0] : (arg)[0])
     
 int parse_args(int *argc, char** argv){
-    if(*argc < 1){
+    if(*argc > 1){
         printf("\tEnter -help to use the application properly\n");
         return -1;
     }
@@ -14,6 +14,7 @@ int parse_args(int *argc, char** argv){
         arg = ARG_SHIFT(argc, argv);
         printf("%s\n", arg);
     }
+    return 0;
 }
 
 int main(int argc, char** argv){
@@ -25,9 +26,9 @@ int main(int argc, char** argv){
     }
 
     const char* config_file = "proxy.config";
-    DnsServer_t proxy_server = {};
+    DnsServer_t proxy_server = {0};
     
-    //Parse porxy dns config file
+    //Parse proxy dns config file
     if((res = parse_config_file(&proxy_server, config_file)) < 0){
         return res;
     }

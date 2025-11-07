@@ -82,6 +82,38 @@ To rebuild project use:
 ```bash
     make all
 ```
+# System testing environment
+To prepare testing environment run test_env.sh script or create virtual environment and install pytest module by yourself with pip or wheel.
+
+```sh
+python3 -m venv venv
+
+source venv/bin/activate
+
+pip install pytest
+```
+
+# Testing
+Tested with util dig (DNS lookup utility)
+
+1. Domain from blacklist REFUSE type:
+
+
+2. Domain from blacklist NOT_FOUND type:
+
+
+3. Domain from blacklist with READDRESSING type:
+
+
+4. Existed domain not from blacklist:
+
+
+5. Not existed domain not from blacklist:
+
+
+6. Not existed upstream DNS:
+
+
 
 # WARNINGS
 - Handling queries in single thread

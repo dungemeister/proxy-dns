@@ -1,10 +1,11 @@
-app := proxy-dns
+APP := proxy-dns
+FLAGS := -Wall -Wextra -Wpedantic -g -O0
 
 all: clean build
 
 build: main.c
-	cc -g -O0 main.c -o $(app)
+	cc $(FLAGS) main.c -o $(APP)
 
 clean:
-	rm -rf $(app)
+	rm -rf $(APP)
 

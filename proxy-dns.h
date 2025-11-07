@@ -138,10 +138,10 @@ static int  create_dns_socket(uint32_t addr, int port);
 static void add_domain_to_blacklist(DomainList_t* blacklist, char* domain, BlacklistDomainType_t type);
 static bool is_domain_blacklisted(DomainList_t* blacklist, char* domain);
 static void trim_whitespace(char *str);
-static unsigned int ip_to_uint32(const char* ip_address_str);
+static uint32_t ip_to_uint32(const char* ip_address_str);
 static void parse_question_section(char* buffer, char* domain);
-static void build_blocked_response(unsigned char *buffer, int *len, unsigned char *query);
-static int forward_to_upstream(unsigned char* query, int query_len, unsigned char* response, int response_buf_size, DnsServer_t* server);
+static void build_blocked_response(char *buffer, int *len, char *query);
+static int forward_to_upstream(char* query, int query_len, char* response, int response_buf_size, DnsServer_t* server);
 
 //Implementation
 static void add_domain_to_blacklist(DomainList_t* blacklist, char* domain, BlacklistDomainType_t type){
@@ -149,7 +149,6 @@ static void add_domain_to_blacklist(DomainList_t* blacklist, char* domain, Black
         fprintf(stderr, "Failed to add domain %s. Overflow\n", domain);
         return;
     }
-    int length = strlen(domain);
     strcpy(blacklist->domains[blacklist->size].name, domain);
     blacklist->domains[blacklist->size++].type = type;
 }
@@ -159,8 +158,8 @@ static bool is_domain_blacklisted(DomainList_t* blacklist, char* domain){
         if(strstr(domain, blacklist->domains[i].name) != NULL) {
             return true;
         }
-        return false;
     }
+    return false;
 }
 
 static void trim_whitespace(char *str) {
@@ -216,7 +215,7 @@ static int parse_config_file(DnsServer_t* server, const char* config_file){
     while(fgets(line, 256, cf)){
         line_number++;
         char* orig_line = strdup(line);
-        int length = strlen(line);
+        (void)orig_line;
         if(line[strlen(line) - 1] == '\n')
             line[strlen(line) - 1] = '\0';
 
@@ -286,7 +285,7 @@ static int create_dns_server(DnsServer_t* server){
 static void parse_question_section(char* buffer, char* domain){
     int offset = 0;
     int data_offset = 0;
-    char data[256] = {};
+    char data[256] = {0};
     while(buffer[offset] != 0){
         memcpy(&data[data_offset], &buffer[offset + 1], buffer[offset]);
         data_offset += buffer[offset];
@@ -301,7 +300,7 @@ static void parse_question_section(char* buffer, char* domain){
     return;
 }
 
-static void build_blocked_response(unsigned char *buffer, int *len, unsigned char *query) {
+static void build_blocked_response(char *buffer, int *len, char *query) {
     DnsQueryHeader_t* header = (DnsQueryHeader_t*)buffer;
     DnsQueryHeader_t* qheader = (DnsQueryHeader_t*)query;
     
@@ -325,7 +324,7 @@ static void build_blocked_response(unsigned char *buffer, int *len, unsigned cha
     
 }
 
-static int forward_to_upstream(unsigned char* query, int query_len, unsigned char* response, int response_buf_size, DnsServer_t* server) {
+static int forward_to_upstream(char* query, int query_len, char* response, int response_buf_size, DnsServer_t* server) {
     int sock_fd = socket(AF_INET, SOCK_DGRAM, 0);
     if(sock_fd < 0) {
         perror("Socket creation failed");
@@ -362,7 +361,7 @@ static int forward_to_upstream(unsigned char* query, int query_len, unsigned cha
     return response_len;
 }
 
-static void build_fail_response(unsigned char *buffer, int *len, unsigned char *query, BlacklistDomain_t domain){
+static void build_fail_response(char *buffer, int *len, char *query, BlacklistDomain_t domain){
     DnsQueryHeader_t* header = (DnsQueryHeader_t*)buffer;
     DnsQueryHeader_t* qheader = (DnsQueryHeader_t*)query;
     
@@ -387,7 +386,7 @@ static void build_fail_response(unsigned char *buffer, int *len, unsigned char *
 
 static void serve_proxy_dns(DnsServer_t* server){
     size_t client_buffer_size = 256;
-    unsigned char buffer[client_buffer_size];
+    char buffer[client_buffer_size];
 
     char domain_name_buffer[256];
     char upstream_response[256];
@@ -431,7 +430,7 @@ static void serve_proxy_dns(DnsServer_t* server){
                 printf("Forwarded response for: %s (%d bytes)\n", domain_name_buffer, response_len);
             }
             else{
-                build_fail_response(buffer, &recv_len, buffer, (BlacklistDomain_t){});
+                build_fail_response(buffer, &recv_len, buffer, (BlacklistDomain_t){0});
                 sendto(server->sock_fd, buffer, recv_len, 0,
                     (struct sockaddr*)&client_addr, client_len);
             }
