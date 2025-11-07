@@ -2,30 +2,33 @@
 #include "proxy-dns.h"
 
 #define ARG_SHIFT(argc, arg) (--(*(argc)) > 0 ? ((arg)++)[0] : (arg)[0])
-    
+
+const char* config_file = "proxy.config";
+
+
 int parse_args(int *argc, char** argv){
-    if(*argc > 1){
-        printf("\tEnter -help to use the application properly\n");
-        return -1;
+    char* program_path = ARG_SHIFT(argc, argv);
+    (void)program_path;
+    if(argc > 1){
+        fprintf(stderr, "ERROR: Correct App usage - proxy-dns <config_file> (optional) \n");
+    }
+    if(*argc == 1){
+        char* new_config_file = ARG_SHIFT(argc, argv);
+        config_file = new_config_file;
+        printf("Config file: %s\n", new_config_file);
     }
 
-    char* arg;
-    while(*argc > 0){
-        arg = ARG_SHIFT(argc, argv);
-        printf("%s\n", arg);
-    }
     return 0;
 }
 
 int main(int argc, char** argv){
     printf("Hello from proxy-dns\n");
-    
+
     int res = 0;
     if((res = parse_args(&argc, argv)) != 0){
         return res;
     }
 
-    const char* config_file = "proxy.config";
     DnsServer_t proxy_server = {0};
     
     //Parse proxy dns config file
