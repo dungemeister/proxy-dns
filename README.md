@@ -65,23 +65,23 @@ proxy_dns_shutdown(&proxy_server);
 Independent one header file library from scratch.
 
 # Build
-    To build project use:
+To build project use:
 
-    ```bash
-        make build
-    ```
+```bash
+    make build
+```
 
-    To clean project use:
+To clean project use:
 
-    ```bash
-        make clean
-    ```
+```bash
+    make clean
+```
 
-    To rebuild project use:
-    
-    ```bash
-        make all
-    ```
+To rebuild project use:
+
+```bash
+    make all
+```
 
 # WARNINGS
 - Handling queries in single thread
