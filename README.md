@@ -7,7 +7,7 @@ One header file proxy-dns.h library. Configurable proxy-dns server.
 Proxy DNS application with config file based on UDP datagrams.
 App accepts blacklist from config file to manage desired actions to hostnames:
 - refuse - to refuse query (RCODE=5 (Refused))
-- not_found - to notify about (RCODE=3(Name Error))
+- not_found - to notify about name error (RCODE=3(Name Error))
 - ip_address - to answer to query with desired IP (RCODE=0 (No Error))
 Other posible RCODES:
 - RCODE=2 (Server Failure) - upstream DNS timeout
