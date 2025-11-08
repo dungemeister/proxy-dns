@@ -121,6 +121,7 @@ Tested with util dig (DNS lookup utility)
 - Handling queries in single thread
 - Necessary fields in config file: 'local-dns:', 'upstream-dns:', 'blacklist:'
 - Broken trim_whitespaces function
+- Limitted length of the input line buffer. Look at preprocessed variable LINE_BUFFER_SIZE.
 
 # ERRATA
 - Segfault with broken config

@@ -11,6 +11,8 @@
 #include <sys/time.h>
 #include <assert.h>
 
+#define LINE_BUFFER_SIZE                (2048)
+
 #define MAX_BLACKLIST_DOMAINS           (100)
 #define BLACKLIST_TYPE_REFUSE_CHAR      ("refuse")
 #define BLACKLIST_TYPE_NOT_FOUND_CHAR   ("not_found")
@@ -195,7 +197,7 @@ static void trim_whitespace(char *str) {
     end[1] = '\0';
 }
 
-static unsigned int ip_to_uint32(const char* ip_address_str) {
+static uint32_t ip_to_uint32(const char* ip_address_str) {
     unsigned int ip_int = 0;
     char temp_ip_str[16]; // To hold IPv4 string
     strcpy(temp_ip_str, ip_address_str); // Create a mutable copy
@@ -233,13 +235,11 @@ static int parse_config_file(DnsServer_t* server, const char* config_file){
         return -1;
     }
 
-    char line[256];
+    char line[LINE_BUFFER_SIZE];
     int line_number = 0;
 
-    while(fgets(line, 256, cf)){
+    while(fgets(line, LINE_BUFFER_SIZE, cf)){
         line_number++;
-        char* orig_line = strdup(line);
-        (void)orig_line;
         if(line[strlen(line) - 1] == '\n')
             line[strlen(line) - 1] = '\0';
 

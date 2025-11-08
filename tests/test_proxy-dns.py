@@ -47,32 +47,32 @@ def test_blacklist_readressing():
     for domain in blacklist:
         start_proxy_dns(f"{TESTS_DIR}/test3.config")
         output = start_dig("127.0.0.1", "6969", domain)
-        parse_output(output, "NXDOMAIN")
+        parse_output(output, "NOERROR")
 
 def test_existed_domain():
-    blacklist = ["google.com"]
+    blacklist = ["github.com"]
     for domain in blacklist:
         start_proxy_dns(f"{TESTS_DIR}/test4.config")
         output = start_dig("127.0.0.1", "6969", domain)
-        parse_output(output, "NXDOMAIN")
+        parse_output(output, "NOERROR")
 
 def test_not_existed_domain():
-    blacklist = ["google.com"]
+    blacklist = ["googlerrob.com.123.123"]
     for domain in blacklist:
         start_proxy_dns(f"{TESTS_DIR}/test5.config")
         output = start_dig("127.0.0.1", "6969", domain)
         parse_output(output, "NXDOMAIN")
 
 def test_not_existed_upstream():
-    blacklist = ["google.com"]
+    blacklist = ["github.com"]
     for domain in blacklist:
         start_proxy_dns(f"{TESTS_DIR}/test6.config")
         output = start_dig("127.0.0.1", "6969", domain)
-        parse_output(output, "NXDOMAIN")
+        parse_output(output, "SERVFAIL")
 
 def test_correct_queries_with_huge_clacklist():
-    blacklist = ["google.com"]
+    blacklist = ["github.com"]
     for domain in blacklist:
         start_proxy_dns(f"{TESTS_DIR}/test7.config")
         output = start_dig("127.0.0.1", "6969", domain)
-        parse_output(output, "NXDOMAIN")
+        parse_output(output, "NOERROR")
