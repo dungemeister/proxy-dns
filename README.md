@@ -132,6 +132,6 @@ Tested with util dig (DNS lookup utility)
 - [ ] Unit tests
 - [ ] Add default params for proxy server
 - [ ] Add signals handling for app
-- [ ] Add checking to the same domains in blacklist
+- [ ] Add checking domain name while appending in blacklist
 - [ ] Add cache for requested domains
 - [x] Add programm args parsing
