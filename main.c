@@ -9,7 +9,7 @@ const char* config_file = "proxy.config";
 int parse_args(int *argc, char** argv){
     char* program_path = ARG_SHIFT(argc, argv);
     (void)program_path;
-    if(argc > 1){
+    if(*argc > 1){
         fprintf(stderr, "ERROR: Correct App usage - proxy-dns <config_file> (optional) \n");
     }
     if(*argc == 1){

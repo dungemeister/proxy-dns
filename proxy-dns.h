@@ -9,6 +9,7 @@
 #include <ctype.h>
 #include <stdbool.h>
 #include <sys/time.h>
+#include <assert.h>
 
 #define MAX_BLACKLIST_DOMAINS           (100)
 #define BLACKLIST_TYPE_REFUSE_CHAR      ("refuse")
@@ -126,6 +127,13 @@ typedef struct{
 }DnsResponseOpts_t;
 #pragma pack(pop)
 
+typedef enum{
+    CUSTOM_RESPONSE_REFUSE = 0,
+    CUSTOM_RESPONSE_NOT_FOUND,
+    CUSTOM_RESPONSE_READDRESSING,
+    CUSTOM_RESPONSE_SERVER_FAILURE,
+}CustomResponse_t;
+
 #define DNS_QUESTION_SECTION_OFFSET (sizeof(DnsQueryHeader_t))
 
 //Declaration functions as API
@@ -140,7 +148,8 @@ static bool is_domain_blacklisted(DomainList_t* blacklist, char* domain);
 static void trim_whitespace(char *str);
 static uint32_t ip_to_uint32(const char* ip_address_str);
 static void parse_question_section(char* buffer, char* domain);
-static void build_blocked_response(char *buffer, int *len, char *query);
+static void build_blocked_response(char *buffer, int *len, char *query, BlacklistDomainType_t type);
+static void build_fail_response(char *buffer, int *len, char *query, CustomResponse_t domain);
 static int forward_to_upstream(char* query, int query_len, char* response, int response_buf_size, DnsServer_t* server);
 
 //Implementation
@@ -166,6 +175,14 @@ static bool is_domain_blacklisted(DomainList_t* blacklist, char* domain){
     return false;
 }
 
+static BlacklistDomainType_t get_domain_type(DomainList_t* blacklist, char* domain){
+    for(int i = 0; i < blacklist->size; i++) {
+        if(strstr(domain, blacklist->domains[i].name) != NULL) {
+            return blacklist->domains[i].type;
+        }
+    }
+    return BLACKLIST_DOMAIN_TYPE_NOT_BLACKLISTED;
+}
 static void trim_whitespace(char *str) {
     char *end;
     if(str == NULL) return;
@@ -315,27 +332,14 @@ static void parse_question_section(char* buffer, char* domain){
     return;
 }
 
-static void build_blocked_response(char *buffer, int *len, char *query) {
-    DnsQueryHeader_t* header = (DnsQueryHeader_t*)buffer;
-    DnsQueryHeader_t* qheader = (DnsQueryHeader_t*)query;
-    
-    // Copy ID from query
-    header->id = qheader->id;
-    
-    header->flags = htons(DNS_HEADER_FLAGS_QR_RESPONSE      | DNS_HEADER_FLAGS_OPCODE_STANDART_QUERY |
-                          DNS_HEADER_FLAGS_RCODE_NXDOMAIN   | DNS_HEADER_FLAGS_AA_NON_AUTORITATIVE |
-                          DNS_HEADER_FLAGS_RD_RECURSIVE     | DNS_HEADER_FLAGS_RA_RECURSIVE);
-    
-    // Counts
-    header->qdcount = qheader->qdcount;
-    header->ancount = 0;
-    header->nscount = 0;
-    header->arcount = 0;
-    
-    // Copy question section
-    memcpy(buffer + sizeof(DnsQueryHeader_t), 
-           query + sizeof(DnsQueryHeader_t), 
-           *len - sizeof(DnsQueryHeader_t));
+static void build_blocked_response(char *buffer, int *len, char *query, BlacklistDomainType_t type) {
+    if(type == BLACKLIST_DOMAIN_TYPE_REFUSED)
+        build_fail_response(buffer, len, query, CUSTOM_RESPONSE_REFUSE);
+    else if(type == BLACKLIST_DOMAIN_TYPE_NOT_FOUND)
+        build_fail_response(buffer, len, query, CUSTOM_RESPONSE_NOT_FOUND);
+    else if(type == BLACKLIST_DOMAIN_TYPE_TRANSFORM){
+        assert(false && "NOT IMPLEMENTED YET");
+    }
     
 }
 
@@ -376,17 +380,28 @@ static int forward_to_upstream(char* query, int query_len, char* response, int r
     return response_len;
 }
 
-static void build_fail_response(char *buffer, int *len, char *query, BlacklistDomain_t domain){
+static void build_fail_response(char *buffer, int *len, char *query, CustomResponse_t resp_type){
     DnsQueryHeader_t* header = (DnsQueryHeader_t*)buffer;
     DnsQueryHeader_t* qheader = (DnsQueryHeader_t*)query;
     
     // Copy ID from query
     header->id = qheader->id;
     
-    header->flags = htons(DNS_HEADER_FLAGS_QR_RESPONSE              | DNS_HEADER_FLAGS_OPCODE_STANDART_QUERY |
-                          DNS_HEADER_FLAGS_RCODE_SERVER_FAILURE     | DNS_HEADER_FLAGS_AA_NON_AUTORITATIVE |
-                          DNS_HEADER_FLAGS_RD_RECURSIVE             | DNS_HEADER_FLAGS_RA_RECURSIVE);
+    header->flags = htons(DNS_HEADER_FLAGS_QR_RESPONSE         | DNS_HEADER_FLAGS_OPCODE_STANDART_QUERY |
+                          DNS_HEADER_FLAGS_AA_NON_AUTORITATIVE | DNS_HEADER_FLAGS_RD_RECURSIVE |
+                          DNS_HEADER_FLAGS_RA_RECURSIVE);
     
+    header->flags &= ~DNS_HEADER_FLAGS_RCODE_MASK;
+    if(resp_type == CUSTOM_RESPONSE_NOT_FOUND){
+        header->flags |= htons(DNS_HEADER_FLAGS_RCODE_NXDOMAIN);
+    }
+    else if(resp_type == CUSTOM_RESPONSE_REFUSE){
+        header->flags |= htons(DNS_HEADER_FLAGS_RCODE_REFUSED);
+    }
+    else if(resp_type == CUSTOM_RESPONSE_SERVER_FAILURE){
+        header->flags |= htons(DNS_HEADER_FLAGS_RCODE_SERVER_FAILURE);
+    }
+
     // Counts
     header->qdcount = qheader->qdcount;
     header->ancount = 0;
@@ -422,7 +437,8 @@ static void serve_proxy_dns(DnsServer_t* server){
             continue;
         }
         const DnsQueryHeader_t* header = (DnsQueryHeader_t*)buffer;
-        
+        (void)header;
+
         void* question_section = buffer + DNS_QUESTION_SECTION_OFFSET;
         parse_question_section((char*)question_section, domain_name_buffer);
         
@@ -431,8 +447,8 @@ static void serve_proxy_dns(DnsServer_t* server){
         bool res = is_domain_blacklisted(&server->conf.blacklist, domain_name_buffer);
         if(res){
             printf("%s is in blacklist\n", domain_name_buffer);
-            build_blocked_response(buffer, &recv_len, buffer);
-            
+            BlacklistDomainType_t type =  get_domain_type(&server->conf.blacklist, domain_name_buffer);
+            build_blocked_response(buffer, &recv_len, buffer, type);
             sendto(server->sock_fd, buffer, recv_len, 0,
                     (struct sockaddr*)&client_addr, client_len);
         }
@@ -445,7 +461,7 @@ static void serve_proxy_dns(DnsServer_t* server){
                 printf("Forwarded response for: %s (%d bytes)\n", domain_name_buffer, response_len);
             }
             else{
-                build_fail_response(buffer, &recv_len, buffer, (BlacklistDomain_t){0});
+                build_fail_response(buffer, &recv_len, buffer, CUSTOM_RESPONSE_SERVER_FAILURE);
                 sendto(server->sock_fd, buffer, recv_len, 0,
                     (struct sockaddr*)&client_addr, client_len);
             }
