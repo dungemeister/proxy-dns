@@ -180,6 +180,10 @@ static void add_domain_to_blacklist(DomainList_t* blacklist, char* domain, Black
         fprintf(stderr, "WARNING: domain name is %s\n", domain);
         return;
     }
+    if(is_domain_blacklisted(blacklist, domain)){
+        fprintf(stderr, "WARNING: domain '%s' already blacklisted. Ignored\n", domain);
+        return;
+    }
     strcpy(blacklist->domains[blacklist->size].name, domain);
     blacklist->domains[blacklist->size].redirect_ip = redirect_ip;
     blacklist->domains[blacklist->size++].type = type;
