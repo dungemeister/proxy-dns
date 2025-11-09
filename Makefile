@@ -1,11 +1,20 @@
 APP := proxy-dns
 FLAGS := -Wall -Wextra -Wpedantic -g -O0
+BUILD_DIR := build
 
-all: clean build
+.PHONY: all
+all: ${APP}
 
-build: main.c
-	cc $(FLAGS) main.c -o $(APP)
+${APP}: ${BUILD_DIR} main.c
+	cc $(FLAGS) main.c -o ${BUILD_DIR}/$(APP)
 
+${BUILD_DIR}:
+	mkdir -p ${BUILD_DIR}
+
+.PHONY: rebuild
+rebuild: clean build
+
+.PHONY: clean
 clean:
-	rm -rf $(APP)
+	rm -rf ${BUILD_DIR}/$(APP)
 
