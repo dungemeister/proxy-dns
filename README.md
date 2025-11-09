@@ -47,7 +47,7 @@ To Launch with default path to config file (proxy.config):
 ./build/proxy-dns
 ```
 
-To Launch with default path to desired config file:
+To Launch with desired config file run with arg:
 ```txt
 
 ./build/proxy-dns path_to_config
