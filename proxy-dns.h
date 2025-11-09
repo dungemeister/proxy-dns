@@ -12,6 +12,7 @@
 #include <assert.h>
 
 #define LINE_BUFFER_SIZE                (2048)
+#define CLIENT_BUFFER_SIZE              (256)
 
 #define MAX_BLACKLIST_DOMAINS           (100)
 #define BLACKLIST_TYPE_REFUSE_CHAR      ("refuse")
@@ -63,35 +64,47 @@
 #define DNS_HEADER_FLAGS_RCODE_NOT_SUPPORTED            ((4 << DNS_HEADER_FLAGS_RCODE_OFFSET) & DNS_HEADER_FLAGS_RCODE_MASK)
 #define DNS_HEADER_FLAGS_RCODE_REFUSED                  ((5 << DNS_HEADER_FLAGS_RCODE_OFFSET) & DNS_HEADER_FLAGS_RCODE_MASK)
 
+#define DNS_QUERY_TYPE_A            (1)
+#define DNS_QUERY_TYPE_NAME_SERVER  (2)
+#define DNS_QUERY_TYPE_CNAME        (5)
+#define DNS_QUERY_TYPE_SOA          (6)
+#define DNS_QUERY_TYPE_MX           (15)
+#define DNS_QUERY_TYPE_TXT          (16)
+#define DNS_QUERY_TYPE_AAAA         (28)
+#define DNS_QUERY_TYPE_HTTPS        (65)
+
+#define DNS_QUERY_CLASS_IN          (1)
+
 typedef enum{
     BLACKLIST_DOMAIN_TYPE_NOT_BLACKLISTED = 0,
     BLACKLIST_DOMAIN_TYPE_REFUSED,
     BLACKLIST_DOMAIN_TYPE_NOT_FOUND,
-    BLACKLIST_DOMAIN_TYPE_TRANSFORM,
+    BLACKLIST_DOMAIN_TYPE_REDIRECT,
 }BlacklistDomainType_t;
 
 typedef struct{
-    BlacklistDomainType_t type;
-    char name[256];
+    char                    name[256];
+    BlacklistDomainType_t   type;
+    uint32_t                redirect_ip;
 }BlacklistDomain_t;
 
 typedef struct{
-    BlacklistDomain_t domains[MAX_BLACKLIST_DOMAINS];
-    int size;
-    int capacity;
+    BlacklistDomain_t   domains[MAX_BLACKLIST_DOMAINS];
+    int                 size;
+    int                 capacity;
 }DomainList_t;
 
 typedef struct {
-    uint32_t upstream_ip;
-    int         upstream_port;
-    uint32_t         local_ip;
-    int         local_port;
-    DomainList_t blacklist;
+    uint32_t        upstream_ip;
+    int             upstream_port;
+    uint32_t        local_ip;
+    int             local_port;
+    DomainList_t    blacklist;
 }DnsServerConfig_t;
 
 typedef struct {
-    DnsServerConfig_t conf;
-    int sock_fd;
+    DnsServerConfig_t   conf;
+    int                 sock_fd;
 }DnsServer_t;
 
 #pragma pack(push, 1)
@@ -114,8 +127,8 @@ typedef struct{
 
 #pragma pack(push, 1)
 typedef struct{
-    char* qname;
-    DnsQueryQuestionOpts_t opts;
+    char*                   qname;
+    DnsQueryQuestionOpts_t  opts;
 }DnsQueryQuestionSection_t;
 #pragma pack(pop)
 
@@ -125,7 +138,6 @@ typedef struct{
     uint16_t rclass;
     uint32_t ttl;
     uint16_t length;
-
 }DnsResponseOpts_t;
 #pragma pack(pop)
 
@@ -137,25 +149,29 @@ typedef enum{
 }CustomResponse_t;
 
 #define DNS_QUESTION_SECTION_OFFSET (sizeof(DnsQueryHeader_t))
+#define DNS_HEADER_SECTION_SIZE     DNS_QUESTION_SECTION_OFFSET
 
 //Declaration functions as API
-static int  parse_config_file(DnsServer_t* server, const char* config_file);
-static int  create_dns_server(DnsServer_t* server);
-static void serve_proxy_dns(DnsServer_t* server);
-static void proxy_dns_shutdown(DnsServer_t* server);
+static int  parse_config_file   (DnsServer_t* server, const char* config_file);
+static int  create_dns_server   (DnsServer_t* server);
+static void serve_proxy_dns     (DnsServer_t* server);
+static void proxy_dns_shutdown  (DnsServer_t* server);
 //Declaration internal dunctions
+static void add_domain_to_blacklist (DomainList_t* blacklist, char* domain, BlacklistDomainType_t type, uint32_t redirect_ip);
+static bool is_domain_blacklisted   (DomainList_t* blacklist, char* domain);
+
 static int  create_dns_socket(uint32_t addr, int port);
-static void add_domain_to_blacklist(DomainList_t* blacklist, char* domain, BlacklistDomainType_t type);
-static bool is_domain_blacklisted(DomainList_t* blacklist, char* domain);
-static void trim_whitespace(char *str);
-static uint32_t ip_to_uint32(const char* ip_address_str);
-static void parse_question_section(char* buffer, char* domain);
-static void build_blocked_response(char *buffer, int *len, char *query, BlacklistDomainType_t type);
-static void build_fail_response(char *buffer, int *len, char *query, CustomResponse_t domain);
-static int forward_to_upstream(char* query, int query_len, char* response, int response_buf_size, DnsServer_t* server);
+
+static void     trim_whitespace (char *str);
+static uint32_t ip_to_uint32    (const char* ip_address_str);
+
+static void parse_question_section  (char* buffer, char* domain);
+static void build_blocked_response  (char *buffer, int *len, char *query, BlacklistDomain_t type);
+static void build_fail_response     (char *buffer, int *len, char *query, CustomResponse_t domain);
+static int  forward_to_upstream     (char* query, int query_len, char* response, int response_buf_size, DnsServer_t* server);
 
 //Implementation
-static void add_domain_to_blacklist(DomainList_t* blacklist, char* domain, BlacklistDomainType_t type){
+static void add_domain_to_blacklist(DomainList_t* blacklist, char* domain, BlacklistDomainType_t type, uint32_t redirect_ip){
     if((blacklist->size + 1) > MAX_BLACKLIST_DOMAINS){
         fprintf(stderr, "Failed to add domain %s. Overflow\n", domain);
         return;
@@ -165,10 +181,13 @@ static void add_domain_to_blacklist(DomainList_t* blacklist, char* domain, Black
         return;
     }
     strcpy(blacklist->domains[blacklist->size].name, domain);
+    blacklist->domains[blacklist->size].redirect_ip = redirect_ip;
     blacklist->domains[blacklist->size++].type = type;
 }
 
 static bool is_domain_blacklisted(DomainList_t* blacklist, char* domain){
+    if (domain == NULL) return false;
+
     for(int i = 0; i < blacklist->size; i++) {
         if(strstr(domain, blacklist->domains[i].name) != NULL) {
             return true;
@@ -185,6 +204,16 @@ static BlacklistDomainType_t get_domain_type(DomainList_t* blacklist, char* doma
     }
     return BLACKLIST_DOMAIN_TYPE_NOT_BLACKLISTED;
 }
+
+static BlacklistDomain_t get_domain_from_string(DomainList_t* blacklist, char* domain){
+    for(int i = 0; i < blacklist->size; i++) {
+        if(strstr(domain, blacklist->domains[i].name) != NULL) {
+            return blacklist->domains[i];
+        }
+    }
+    assert(false && "Cannot find domain in blacklist");
+}
+
 static void trim_whitespace(char *str) {
     char *end;
     if(str == NULL) return;
@@ -215,6 +244,11 @@ static uint32_t ip_to_uint32(const char* ip_address_str) {
     return ip_int;
 }
 
+static bool is_str_ip(char* str){
+    uint32_t ip = 0;
+    return 1 == inet_pton(AF_INET, str, &ip);
+}
+
 static BlacklistDomainType_t get_domain_type_from_string(char* type){
     if(type == NULL) return BLACKLIST_DOMAIN_TYPE_NOT_BLACKLISTED;
 
@@ -224,7 +258,10 @@ static BlacklistDomainType_t get_domain_type_from_string(char* type){
     if(strstr(type, BLACKLIST_TYPE_NOT_FOUND_CHAR) != NULL){
         return BLACKLIST_DOMAIN_TYPE_NOT_FOUND;
     }
-    return BLACKLIST_DOMAIN_TYPE_REFUSED;
+    if(is_str_ip(type)){
+        return BLACKLIST_DOMAIN_TYPE_REDIRECT;
+    }
+    return BLACKLIST_DOMAIN_TYPE_NOT_BLACKLISTED;
 }
 
 static int parse_config_file(DnsServer_t* server, const char* config_file){
@@ -269,7 +306,6 @@ static int parse_config_file(DnsServer_t* server, const char* config_file){
                     if(token){
                         tokens[size] = token;
                         token = tokens[size];
-                        printf("%s\n", tokens[size]);
                         size++;
                     }
                 }
@@ -278,8 +314,11 @@ static int parse_config_file(DnsServer_t* server, const char* config_file){
                     char *domain = strtok(tokens[i], "-");
                     char *action_or_ip = strtok(NULL, "-");
 
+                    uint32_t redirect_ip = 0x0;
                     BlacklistDomainType_t type = get_domain_type_from_string(action_or_ip);
-                    add_domain_to_blacklist(&server->conf.blacklist, domain, type);
+                    if(type == BLACKLIST_DOMAIN_TYPE_REDIRECT) redirect_ip = ip_to_uint32(action_or_ip);
+                        
+                    add_domain_to_blacklist(&server->conf.blacklist, domain, type, redirect_ip);
                     printf("Added to blacklist: %s-%s\n", domain, action_or_ip);
 
                 }
@@ -313,31 +352,99 @@ static int create_dns_server(DnsServer_t* server){
     return 0;
 }
 
-static void parse_question_section(char* buffer, char* domain){
+static int get_qname_from_section_start(char* src_buffer, char* name_buf){
     int offset = 0;
     int data_offset = 0;
-    char data[256] = {0};
-    while(buffer[offset] != 0){
-        memcpy(&data[data_offset], &buffer[offset + 1], buffer[offset]);
-        data_offset += buffer[offset];
-        offset += buffer[offset] + 1;
-        if(buffer[offset] != 0)
-            data[data_offset++] = 0x2E;
+    while(src_buffer[offset] != 0){
+        if(name_buf != NULL)
+            memcpy(&name_buf[data_offset], &src_buffer[offset + 1], src_buffer[offset]);
+        data_offset += src_buffer[offset];
+        offset += src_buffer[offset] + 1;
+        if(src_buffer[offset] != 0 && (name_buf != NULL))
+            name_buf[data_offset++] = 0x2E;
     }
-    memcpy(domain, data, data_offset + 1);
+    return offset + 1;
+}
+
+static void parse_question_section(char* buffer, char* domain_buf){
+    char data[256] = {0};
+    int qname_size = get_qname_from_section_start(buffer, data);
+    memcpy(domain_buf, data, qname_size + 1);
+    //Query opts parsing
     DnsQueryQuestionOpts_t q_opts;
-    q_opts.qtype =  ntohs(*(uint16_t*)&buffer[offset + 1]);
-    q_opts.qclass = ntohs(*(uint16_t*)&buffer[offset + 1 + sizeof(q_opts.qtype)]);
+    q_opts.qtype =  ntohs(*(uint16_t*)&buffer[qname_size + 1]);
+    q_opts.qclass = ntohs(*(uint16_t*)&buffer[qname_size + 1 + sizeof(q_opts.qtype)]);
     return;
 }
 
-static void build_blocked_response(char *buffer, int *len, char *query, BlacklistDomainType_t type) {
-    if(type == BLACKLIST_DOMAIN_TYPE_REFUSED)
+static void build_readressed_response(char *buffer, int *len, char *query, BlacklistDomain_t domain){
+    DnsQueryHeader_t *header  = (DnsQueryHeader_t*)buffer;
+    DnsQueryHeader_t *qheader = (DnsQueryHeader_t*)query;
+    
+    // Set flags (QR=1, AA=1, RD=0, RA=0, RCODE=0)
+    header->flags = htons(DNS_HEADER_FLAGS_QR_RESPONSE | DNS_HEADER_FLAGS_AA_AUTORITATIVE |
+                          DNS_HEADER_FLAGS_RD_NOT_RECURSIVE | DNS_HEADER_FLAGS_RA_NOT_RECURSIVE |
+                          DNS_HEADER_FLAGS_RCODE_NO_ERROR);
+    
+    // Set header values
+    header->id = qheader->id;
+    header->qdcount = qheader->qdcount;
+    header->ancount = htons(1); // One answer
+    header->nscount = 0;
+    header->arcount = qheader->arcount;
+
+    memcpy(buffer + sizeof(DnsQueryHeader_t), 
+           query  + sizeof(DnsQueryHeader_t), 
+           *len - DNS_HEADER_SECTION_SIZE);
+
+    int query_qname_size = get_qname_from_section_start(buffer + sizeof(DnsQueryHeader_t), NULL);
+    int query_section_size = query_qname_size + sizeof(DnsQueryQuestionOpts_t);
+    int answer_size = 16;
+
+    if(header->arcount != 0 || header->nscount != 0){
+        //Gapping between query section and other sections to insert answer section
+        memmove(buffer + sizeof(DnsQueryHeader_t) + query_section_size + answer_size,
+                buffer + sizeof(DnsQueryHeader_t) + query_section_size,
+                *len - (sizeof(DnsQueryHeader_t) + query_section_size));
+    }
+
+    assert(*len + answer_size < CLIENT_BUFFER_SIZE && "Size of input query more than allocated buffer size");
+    // Allocate answer section buffer
+    // char answer[answer_size];
+    char* answer = buffer + sizeof(DnsQueryHeader_t) + query_section_size;
+    
+    // Pointer to domain name in question section (0xc00c)
+    answer[0] = (char)(0x3 << 6); //Compressed label
+    answer[1] = sizeof(DnsQueryHeader_t);
+    
+    DnsResponseOpts_t* ropts = (DnsResponseOpts_t*)&answer[2];
+    // Type A (0x0001)
+    ropts->rtype = htons(DNS_QUERY_TYPE_A);
+    
+    // Class IN (0x0001)
+    ropts->rclass = htons(DNS_QUERY_CLASS_IN);
+    
+    // TTL (300 seconds = 0x0000012c)
+    ropts->ttl = htonl(300);
+    
+    // RDATA length (4 bytes for IPv4)
+    ropts->length = htons(sizeof(uint32_t));
+    
+    //IP redirect addr from blacklist domain entry
+    *(uint32_t*)&answer[2 + sizeof(DnsResponseOpts_t)] = htonl(domain.redirect_ip);
+
+    // memcpy(buffer + sizeof(DnsQueryHeader_t) + query_section_size, answer, answer_size);
+    *len += answer_size;
+}
+
+static void build_blocked_response(char *buffer, int *len, char *query, BlacklistDomain_t domain) {
+    if(domain.type == BLACKLIST_DOMAIN_TYPE_REFUSED)
         build_fail_response(buffer, len, query, CUSTOM_RESPONSE_REFUSE);
-    else if(type == BLACKLIST_DOMAIN_TYPE_NOT_FOUND)
+    else if(domain.type == BLACKLIST_DOMAIN_TYPE_NOT_FOUND)
         build_fail_response(buffer, len, query, CUSTOM_RESPONSE_NOT_FOUND);
-    else if(type == BLACKLIST_DOMAIN_TYPE_TRANSFORM){
-        assert(false && "NOT IMPLEMENTED YET");
+    else if(domain.type == BLACKLIST_DOMAIN_TYPE_REDIRECT){
+        // assert(false && "NOT IMPLEMENTED YET");
+        build_readressed_response(buffer, len, query, domain);
     }
     
 }
@@ -383,16 +490,12 @@ static void build_fail_response(char *buffer, int *len, char *query, CustomRespo
     DnsQueryHeader_t* header = (DnsQueryHeader_t*)buffer;
     DnsQueryHeader_t* qheader = (DnsQueryHeader_t*)query;
     
-
-    
-    header->flags = htons(DNS_HEADER_FLAGS_QR_RESPONSE         | DNS_HEADER_FLAGS_OPCODE_STANDART_QUERY |
-                          DNS_HEADER_FLAGS_AA_NON_AUTORITATIVE | DNS_HEADER_FLAGS_RD_RECURSIVE |
-                          DNS_HEADER_FLAGS_RA_RECURSIVE);
     header->flags = qheader->flags;
-
+    //Setting Response bit
     header->flags = htons(ntohs(header->flags) & ~DNS_HEADER_FLAGS_QR_MASK);
     header->flags = htons(ntohs(header->flags) | DNS_HEADER_FLAGS_QR_RESPONSE);
 
+    //Setting Response Code 
     header->flags = htons(ntohs(header->flags) & ~DNS_HEADER_FLAGS_RCODE_MASK);
     if(resp_type == CUSTOM_RESPONSE_NOT_FOUND){
         header->flags |= htons(DNS_HEADER_FLAGS_RCODE_NXDOMAIN);
@@ -418,11 +521,10 @@ static void build_fail_response(char *buffer, int *len, char *query, CustomRespo
 }
 
 static void serve_proxy_dns(DnsServer_t* server){
-    size_t client_buffer_size = 256;
-    char buffer[client_buffer_size];
+    char buffer[CLIENT_BUFFER_SIZE];
 
     char domain_name_buffer[256];
-    char upstream_response[256];
+    char upstream_response[CLIENT_BUFFER_SIZE];
 
     while(true){
         memset(buffer, 0x0, sizeof(buffer));
@@ -449,9 +551,9 @@ static void serve_proxy_dns(DnsServer_t* server){
 
         bool res = is_domain_blacklisted(&server->conf.blacklist, domain_name_buffer);
         if(res){
-            printf("%s is in blacklist\n", domain_name_buffer);
-            BlacklistDomainType_t type =  get_domain_type(&server->conf.blacklist, domain_name_buffer);
-            build_blocked_response(buffer, &recv_len, buffer, type);
+            // printf("%s is in blacklist\n", domain_name_buffer);
+            BlacklistDomain_t domain = get_domain_from_string(&server->conf.blacklist, domain_name_buffer);
+            build_blocked_response(buffer, &recv_len, buffer, domain);
             sendto(server->sock_fd, buffer, recv_len, 0,
                     (struct sockaddr*)&client_addr, client_len);
         }
