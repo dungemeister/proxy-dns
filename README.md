@@ -116,16 +116,20 @@ Tested with util dig (DNS lookup utility)
 
 7. Correct queries with huge blacklist:
 
+# CONSTRAINS
+- Tested only for Class IN queries
+- Only IPv4 (Type A)
 
 # WARNINGS
 - Handling queries in single thread
 - Necessary fields in config file: 'local-dns:', 'upstream-dns:', 'blacklist:'
 - Broken trim_whitespaces function
 - Limitted length of the input line buffer. Look at preprocessed variable LINE_BUFFER_SIZE.
+- Blacklist can contain already appended domain name
 
 # ERRATA
 - Segfault with broken config
-- Answer with desired IP from blacklist is broken  
+- ~~Answer with desired IP from blacklist is broken~~  
 
 # TODO
 - [ ] Update config file and parsing for future features
