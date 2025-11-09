@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include "proxy-dns.h"
+#include <signal.h>
 
 #define ARG_SHIFT(argc, arg) (--(*(argc)) > 0 ? ((arg)++)[0] : (arg)[0])
 
@@ -21,6 +22,10 @@ int parse_args(int *argc, char** argv){
     return 0;
 }
 
+void signal_handler(int sig){
+    exit(-1);
+}
+
 int main(int argc, char** argv){
     printf("Hello from proxy-dns\n");
 
@@ -28,6 +33,9 @@ int main(int argc, char** argv){
     if((res = parse_args(&argc, argv)) != 0){
         return res;
     }
+
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
 
     DnsServer_t proxy_server = {0};
     
