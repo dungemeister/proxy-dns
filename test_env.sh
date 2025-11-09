@@ -10,7 +10,7 @@ echo "Done"
 
 . ${ENV_DIR}/bin/activate
 
-echo "Installing pytest..."
-pip install pytest
+echo "Installing necessary modules..."
+pip install pytest psutil
 echo "Done"
 
