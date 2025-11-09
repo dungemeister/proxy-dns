@@ -94,31 +94,141 @@ pip install pytest
 ```
 
 # Testing
+To run tests execute script run_tests.sh
+
 Tested with util dig (DNS lookup utility)
+**Test .config file must be named as associated function name in test_proxy-dns.py file**
 
 1. Domain from blacklist REFUSE type:
 
+test_blacklist_refused in pytest env.
+Running dig with domain name in blacklist with tag 'refuse':
+
+```bash
+    dig @127.0.0.1 -p 6969 google.com
+```
+
+Expected output status is REFUSED:
+
+```bash
+ ;; ->>HEADER<<- opcode: QUERY, status: REFUSED, id: 5306
+```
 
 2. Domain from blacklist NOT_FOUND type:
 
+test_blacklist_not_found in pytest env
+Running dig with domain name in blacklist with tag 'not_found':
+
+```bash
+    dig @127.0.0.1 -p 6969 ya.ru
+```
+
+Expected output status is REFUSED:
+
+```bash
+ ;; ->>HEADER<<- opcode: QUERY, status: NXDOMAIN, id: 5306
+```
 
 3. Domain from blacklist with READDRESSING type:
 
+test_blacklist_readressing in pytest env
+Running dig with domain name in blacklist with readressing IP '10.10.10.10':
+
+```bash
+    dig @127.0.0.1 -p 6969 ya.ru
+```
+
+Expected output status is NOERROR:
+
+```bash
+ ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 5306
+```
+
+Expected IP from answer section is 10.10.10.10:
+
+```bash
+    yandex.ru.		300	IN	A	10.10.10.10
+```
 
 4. Existed domain not from blacklist:
 
+test_existed_domain in pytest env
+Running dig with domain name not in blacklist 'github.com':
+
+```bash
+    dig @127.0.0.1 -p 6969 github.com
+```
+
+Expected output status is NOERROR:
+
+```bash
+ ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 5306
+```
 
 5. Not existed domain not from blacklist:
 
+test_not_existed_domain in pytest env
+Running dig with domain name not in blacklist and with random name to forward to upstream dns 9.9.9.9:53:
+
+```bash
+    dig @127.0.0.1 -p 6969 googlerrob.com.123.123
+```
+
+Expected output status is NXDOMAIN:
+
+```bash
+ ;; ->>HEADER<<- opcode: QUERY, status: NXDOMAIN, id: 5306
+```
 
 6. Not existed upstream DNS:
 
+test_not_existed_upstream in pytest env
+Running dig with domain name not in blacklist 'github.com' to forward to not existed upstream dns 119.119.119.119:53:
 
-7. Correct queries with huge blacklist:
+```bash
+    dig @127.0.0.1 -p 6969 github.com
+```
+
+Expected output status is SERVFAIL:
+
+```bash
+ ;; ->>HEADER<<- opcode: QUERY, status: SERVFAIL, id: 5306
+```
+
+7. Existed upstream DNS:
+
+test_existed_upstream in pytest env
+Running dig with domain name not in blacklist 'github.com' to forward to existing upstream 9.9.9.9:53:
+
+```bash
+    dig @127.0.0.1 -p 6969 github.com
+```
+
+Expected output status is NOERROR:
+
+```bash
+ ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 5306
+```
+
+8. Correct queries with huge blacklist:
+
+test_correct_queries_with_huge_blacklist in pytest env
+Running dig with domain name not in blacklist 'github.com' to compare parsing time with default timeouts for huge blacklist:
+
+```bash
+    dig @127.0.0.1 -p 6969 github.com
+```
+
+Expected output status is NOERROR:
+
+```bash
+ ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 5306
+```
 
 # CONSTRAINS
 - Tested only for Class IN queries
 - Only IPv4 (Type A)
+- Only userspace local ports > 1024
 
 # WARNINGS
 - Handling queries in single thread
