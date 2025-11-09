@@ -38,7 +38,7 @@ To rebuild project use:
 
 # Launch
 
-Local IP and local port descrived in config file (proxy.config)
+Local IP and local port described in config file (proxy.config)
 
 To Launch with default path to config file (proxy.config):
 
