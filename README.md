@@ -138,7 +138,7 @@ blacklist: youtube.com-refuse
 
 # System testing environment
 To prepare testing environment run test_env.sh script or create virtual environment and install pytest module by yourself with pip or wheel.
-
+A utility dig is required for the tests to work correctly
 ```sh
 python3 -m venv venv
 
