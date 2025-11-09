@@ -26,14 +26,14 @@
 #define DNS_HEADER_FLAGS_RES_OFFSET     (4)
 #define DNS_HEADER_FLAGS_RCODE_OFFSET   (0)
 
-#define DNS_HEADER_FLAGS_QR_MASK        (0x1L << DNS_HEADER_FLAGS_QR_OFFSET)
-#define DNS_HEADER_FLAGS_OPCODE_MASK    (0xFL << DNS_HEADER_FLAGS_OPCODE_OFFSET)
-#define DNS_HEADER_FLAGS_AA_MASK        (0x1L << DNS_HEADER_FLAGS_AA_OFFSET)
-#define DNS_HEADER_FLAGS_TC_MASK        (0x1L << DNS_HEADER_FLAGS_TC_OFFSET)
-#define DNS_HEADER_FLAGS_RD_MASK        (0x1L << DNS_HEADER_FLAGS_RD_OFFSET)
-#define DNS_HEADER_FLAGS_RA_MASK        (0x1L << DNS_HEADER_FLAGS_RA_OFFSET)
-#define DNS_HEADER_FLAGS_RES_MASK       (0x7L << DNS_HEADER_FLAGS_RES_OFFSET)
-#define DNS_HEADER_FLAGS_RCODE_MASK     (0xFL << DNS_HEADER_FLAGS_RCODE_OFFSET)
+#define DNS_HEADER_FLAGS_QR_MASK        (0x1 << DNS_HEADER_FLAGS_QR_OFFSET)
+#define DNS_HEADER_FLAGS_OPCODE_MASK    (0xF << DNS_HEADER_FLAGS_OPCODE_OFFSET)
+#define DNS_HEADER_FLAGS_AA_MASK        (0x1 << DNS_HEADER_FLAGS_AA_OFFSET)
+#define DNS_HEADER_FLAGS_TC_MASK        (0x1 << DNS_HEADER_FLAGS_TC_OFFSET)
+#define DNS_HEADER_FLAGS_RD_MASK        (0x1 << DNS_HEADER_FLAGS_RD_OFFSET)
+#define DNS_HEADER_FLAGS_RA_MASK        (0x1 << DNS_HEADER_FLAGS_RA_OFFSET)
+#define DNS_HEADER_FLAGS_RES_MASK       (0x7 << DNS_HEADER_FLAGS_RES_OFFSET)
+#define DNS_HEADER_FLAGS_RCODE_MASK     (0xF << DNS_HEADER_FLAGS_RCODE_OFFSET)
 
 #define DNS_HEADER_FLAGS_QR_QUERY       ((0 << DNS_HEADER_FLAGS_QR_OFFSET) & DNS_HEADER_FLAGS_QR_MASK)
 #define DNS_HEADER_FLAGS_QR_RESPONSE    ((1 << DNS_HEADER_FLAGS_QR_OFFSET) & DNS_HEADER_FLAGS_QR_MASK)
@@ -224,7 +224,6 @@ static BlacklistDomainType_t get_domain_type_from_string(char* type){
     if(strstr(type, BLACKLIST_TYPE_NOT_FOUND_CHAR) != NULL){
         return BLACKLIST_DOMAIN_TYPE_NOT_FOUND;
     }
-    printf("%s\n", type);
     return BLACKLIST_DOMAIN_TYPE_REFUSED;
 }
 
@@ -384,14 +383,17 @@ static void build_fail_response(char *buffer, int *len, char *query, CustomRespo
     DnsQueryHeader_t* header = (DnsQueryHeader_t*)buffer;
     DnsQueryHeader_t* qheader = (DnsQueryHeader_t*)query;
     
-    // Copy ID from query
-    header->id = qheader->id;
+
     
     header->flags = htons(DNS_HEADER_FLAGS_QR_RESPONSE         | DNS_HEADER_FLAGS_OPCODE_STANDART_QUERY |
                           DNS_HEADER_FLAGS_AA_NON_AUTORITATIVE | DNS_HEADER_FLAGS_RD_RECURSIVE |
                           DNS_HEADER_FLAGS_RA_RECURSIVE);
-    
-    header->flags &= ~DNS_HEADER_FLAGS_RCODE_MASK;
+    header->flags = qheader->flags;
+
+    header->flags = htons(ntohs(header->flags) & ~DNS_HEADER_FLAGS_QR_MASK);
+    header->flags = htons(ntohs(header->flags) | DNS_HEADER_FLAGS_QR_RESPONSE);
+
+    header->flags = htons(ntohs(header->flags) & ~DNS_HEADER_FLAGS_RCODE_MASK);
     if(resp_type == CUSTOM_RESPONSE_NOT_FOUND){
         header->flags |= htons(DNS_HEADER_FLAGS_RCODE_NXDOMAIN);
     }
@@ -402,11 +404,12 @@ static void build_fail_response(char *buffer, int *len, char *query, CustomRespo
         header->flags |= htons(DNS_HEADER_FLAGS_RCODE_SERVER_FAILURE);
     }
 
-    // Counts
+    // Copy data from query
+    header->id = qheader->id;
     header->qdcount = qheader->qdcount;
-    header->ancount = 0;
-    header->nscount = 0;
-    header->arcount = 0;
+    header->ancount = qheader->ancount;
+    header->nscount = qheader->nscount;
+    header->arcount = qheader->arcount;
     
     // Copy question section
     memcpy(buffer + sizeof(DnsQueryHeader_t), 
