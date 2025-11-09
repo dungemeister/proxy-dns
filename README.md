@@ -68,7 +68,7 @@ Independent one header file library from scratch.
 To build project use:
 
 ```bash
-    make build
+    make proxy-dns
 ```
 
 To clean project use:
@@ -80,7 +80,7 @@ To clean project use:
 To rebuild project use:
 
 ```bash
-    make all
+    make rebuild
 ```
 # System testing environment
 To prepare testing environment run test_env.sh script or create virtual environment and install pytest module by yourself with pip or wheel.
