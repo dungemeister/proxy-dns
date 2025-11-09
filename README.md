@@ -13,6 +13,29 @@ App accepts blacklist from config file to manage desired actions to hostnames:
 Other posible RCODES:
 - RCODE=2 (Server Failure) - upstream DNS timeout
 
+# Dependencies
+
+Independent one header file library from scratch.
+
+# Build
+To build project use:
+
+```bash
+    make proxy-dns
+```
+
+To clean project use:
+
+```bash
+    make clean
+```
+
+To rebuild project use:
+
+```bash
+    make rebuild
+```
+
 # Launch
 
 Local IP and local port descrived in config file (proxy.config)
@@ -76,29 +99,6 @@ serve_proxy_dns(&proxy_server);
 // int main()
 // ...
 proxy_dns_shutdown(&proxy_server);
-```
-
-# Dependencies
-
-Independent one header file library from scratch.
-
-# Build
-To build project use:
-
-```bash
-    make proxy-dns
-```
-
-To clean project use:
-
-```bash
-    make clean
-```
-
-To rebuild project use:
-
-```bash
-    make rebuild
 ```
 
 # Config constrains
