@@ -94,14 +94,14 @@ Necessary fields:
 **Each field must occupy one line. The line size is limited by the allocated buffer**
 ### local-dns
 Setting local proxy-dns IP address and port
-field type - local-dns: <IP>:<port>
+field type - local-dns: IP:port
 For example:
 ```text
     local-dns: 127.0.0.1:6969 
 ```
 ### upstream-dns
 Setting upstream dns IP address and port
-field type - upstream-dns: <IP>:<port>
+field type - upstream-dns: IP:port
 For example:
 ```text
     upstream-dns: 9.9.9.9:53
@@ -113,7 +113,7 @@ Line limited by allocated buffer size.
 Actions:
 - refuse - insert in header status REFUSE (RCODE=5)
 - not_found - insert in header status NXDOMAIN (Name Error  RCODE=3)
-- <IP> - building answer section with desired <IP>
+- IP - building answer section with desired IP
 Supports logical separation. Valid examples:
 
 ```text
