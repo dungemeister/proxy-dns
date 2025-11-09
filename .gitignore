@@ -2,4 +2,4 @@
 *.pyc
 *pytest_cache/
 *venv/
-
+build/*
