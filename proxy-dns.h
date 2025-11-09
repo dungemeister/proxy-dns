@@ -6,10 +6,16 @@
 #include <arpa/inet.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <ctype.h>
 #include <stdbool.h>
 #include <sys/time.h>
 #include <assert.h>
+
+#define CONFIG_LOCAL_IP                 ("127.0.0.1")
+#define CONFIG_LOCAL_PORT               (6969)
+#define CONFIG_UPSTREAM_IP              ("9.9.9.9")
+#define CONFIG_UPSTREAM_PORT            (53)
 
 #define LINE_BUFFER_SIZE                (2048)
 #define CLIENT_BUFFER_SIZE              (256)
@@ -171,6 +177,29 @@ static void build_fail_response     (char *buffer, int *len, char *query, Custom
 static int  forward_to_upstream     (char* query, int query_len, char* response, int response_buf_size, DnsServer_t* server);
 
 //Implementation
+
+static inline void print_config_local_dns_help(){
+    printf("Usage:\n\tlocal-dns: 127.0.0.1:6969\nSpace between tokens is necessary");
+}
+
+static void print_config_params(DnsServerConfig_t* conf){
+    
+    struct in_addr ip = {0};
+    
+    ip.s_addr = htonl(conf->local_ip);
+    printf("Local DNS: %s:%d\n", inet_ntoa(ip), conf->local_port);
+
+    ip.s_addr = htonl(conf->upstream_ip);
+    printf("Upstream DNS: %s:%d\n", inet_ntoa(ip), conf->upstream_port);
+}
+
+static void apply_default_config(DnsServerConfig_t* conf){
+    conf->local_ip      = ip_to_uint32(CONFIG_LOCAL_IP);
+    conf->local_port    = CONFIG_LOCAL_PORT;
+    conf->upstream_ip   = ip_to_uint32(CONFIG_UPSTREAM_IP);
+    conf->upstream_port = CONFIG_UPSTREAM_PORT;
+}
+
 static void add_domain_to_blacklist(DomainList_t* blacklist, char* domain, BlacklistDomainType_t type, uint32_t redirect_ip){
     if((blacklist->size + 1) > MAX_BLACKLIST_DOMAINS){
         fprintf(stderr, "Failed to add domain %s. Overflow\n", domain);
@@ -230,27 +259,18 @@ static void trim_whitespace(char *str) {
     end[1] = '\0';
 }
 
-static uint32_t ip_to_uint32(const char* ip_address_str) {
-    unsigned int ip_int = 0;
-    char temp_ip_str[16]; // To hold IPv4 string
-    strcpy(temp_ip_str, ip_address_str); // Create a mutable copy
-
-    char* octet_str = strtok(temp_ip_str, ".");
-    int octet_count = 0;
-
-    while (octet_str != NULL && octet_count < 4) {
-        unsigned int octet = atoi(octet_str);
-        ip_int = (ip_int << 8) | octet;
-        octet_str = strtok(NULL, ".");
-        octet_count++;
-    }
-
-    return ip_int;
-}
-
-static bool is_str_ip(char* str){
+static bool is_str_ip(const char* str){
     uint32_t ip = 0;
     return 1 == inet_pton(AF_INET, str, &ip);
+}
+
+static uint32_t ip_to_uint32(const char* ip_address_str) {
+    if(is_str_ip(ip_address_str)){
+        uint32_t ip = ntohl(inet_addr(ip_address_str));
+        return ip;
+    }
+    assert(false && "Fail to convert ip string to uint32_t");
+    return 0x0;
 }
 
 static BlacklistDomainType_t get_domain_type_from_string(char* type){
@@ -271,7 +291,7 @@ static BlacklistDomainType_t get_domain_type_from_string(char* type){
 static int parse_config_file(DnsServer_t* server, const char* config_file){
     FILE* cf = fopen(config_file, "r");
     if(cf == NULL){
-        fprintf(stderr, "Fail to open config file\n");
+        fprintf(stderr, "Fail to open config file '%s'\n", config_file);
         return -1;
     }
 
@@ -295,7 +315,9 @@ static int parse_config_file(DnsServer_t* server, const char* config_file){
                 params = strtok(NULL, " :");
                 char* port = params;
 
-                printf("Upstream DNS: %s:%s\n", ip, port);
+                assert(port != NULL && "Fail to parse upstream-dns port param");
+                assert(ip != NULL   && "Fail to parse upstream-dns ip param");
+
                 trim_whitespace(ip);
                 server->conf.upstream_ip = ip_to_uint32(ip);
                 trim_whitespace(port);
@@ -335,15 +357,19 @@ static int parse_config_file(DnsServer_t* server, const char* config_file){
                 params = strtok(NULL, " :");
                 char* port = params;
 
-                printf("Local DNS: %s:%s\n", ip, port);
+                assert(port != NULL && "Fail to parse local-dns port param");
+                assert(ip != NULL && "Fail to parse local-dns ip param");
+
                 trim_whitespace(ip);
                 server->conf.local_ip = ip_to_uint32(ip);
                 trim_whitespace(port);
                 server->conf.local_port = atoi(port);
+
             }
             token = strtok(NULL, " \t");
         }
     }
+    print_config_params(&server->conf);
     return 0;
 }
 

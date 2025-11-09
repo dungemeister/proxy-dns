@@ -11,7 +11,9 @@ int parse_args(int *argc, char** argv){
     char* program_path = ARG_SHIFT(argc, argv);
     (void)program_path;
     if(*argc > 1){
+        
         fprintf(stderr, "ERROR: Correct App usage - proxy-dns <config_file> (optional) \n");
+        exit(-1);
     }
     if(*argc == 1){
         char* new_config_file = ARG_SHIFT(argc, argv);
@@ -23,6 +25,7 @@ int parse_args(int *argc, char** argv){
 }
 
 void signal_handler(int sig){
+    (void)sig;
     exit(-1);
 }
 
@@ -41,7 +44,10 @@ int main(int argc, char** argv){
     
     //Parse proxy dns config file
     if((res = parse_config_file(&proxy_server, config_file)) < 0){
-        return res;
+        printf("Applying default settings\n");
+        apply_default_config(&proxy_server.conf);
+        
+        print_config_params(&proxy_server.conf);
     }
 
     //Create dns server

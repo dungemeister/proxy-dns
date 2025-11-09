@@ -362,11 +362,12 @@ Expected output status is NOERROR:
 - ~~Answer with desired IP from blacklist is broken~~  
 
 # TODO
-- [ ] Update config file and parsing for future features
+- [x] ~~Update config file and parsing for future features~~
 - [ ] Add POSIX threads to handle simultaneous connections
 - [ ] Unit tests
-- [ ] Add default params for proxy server
+- [x] ~~Add default params for proxy server~~
 - [x] ~~Add signals handling for app~~
-- [ ] Add checking domain name while appending in blacklist
+- [x] ~~Add checking domain name while appending in blacklist~~
 - [ ] Add cache for requested domains
 - [x] ~~Add programm args parsing~~
+- [ ] Config hot reload
