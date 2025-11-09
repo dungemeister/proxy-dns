@@ -109,11 +109,32 @@ For example:
 
 ### blacklist
 Setting blacklist with domains and different actions for them.
-
+Line limited by allocated buffer size. 
 Actions:
 - refuse - insert in header status REFUSE (RCODE=5)
 - not_found - insert in header status NXDOMAIN (Name Error  RCODE=3)
 - <IP> - building answer section with desired <IP>
+Supports logical separation. Valid examples:
+
+```text
+blacklist: google.com-refuse ya.ru-not_found yandex.ru-10.10.10.10 github.com-refuse linkedin.com-not_found youtube.com-refuse
+```
+
+```text
+blacklist: google.com-refuse github.com-refuse youtube.com-refuse 
+blacklist: ya.ru-not_found linkedin.com-not_found
+blacklist: yandex.ru-10.10.10.10
+```
+
+```text
+blacklist: google.com-refuse
+blacklist: ya.ru-not_found
+blacklist: yandex.ru-10.10.10.10
+blacklist: github.com-refuse
+blacklist: linkedin.com-not_found
+blacklist: youtube.com-refuse
+...
+```
 
 # System testing environment
 To prepare testing environment run test_env.sh script or create virtual environment and install pytest module by yourself with pip or wheel.
