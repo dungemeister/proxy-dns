@@ -13,7 +13,25 @@ App accepts blacklist from config file to manage desired actions to hostnames:
 Other posible RCODES:
 - RCODE=2 (Server Failure) - upstream DNS timeout
 
-# Usage
+# Launch
+
+Local IP and local port descrived in config file (proxy.config)
+
+To Launch with default path to config file (proxy.config):
+
+```txt
+
+./build/proxy-dns
+```
+
+To Launch with default path to desired config file:
+```txt
+
+./build/proxy-dns path_to_config
+```
+
+
+# Library usage
 File main.c demonstrates basic use of the library.
 
 1. It allocates DnsServer structure and config file string.
