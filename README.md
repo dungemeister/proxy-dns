@@ -82,6 +82,39 @@ To rebuild project use:
 ```bash
     make rebuild
 ```
+
+# Config constrains
+Default config name proxy.config. In addition set config path via arg[1].
+
+Necessary fields:
+- 'local-dns:'. The following space is required to separate tokens.
+- 'upstream-dns:'. The following space is required to separate tokens.
+- 'blacklist:'. The following space is required to separate tokens.
+
+**Each field must occupy one line. The line size is limited by the allocated buffer**
+### local-dns
+Setting local proxy-dns IP address and port
+field type - local-dns: <IP>:<port>
+For example:
+```text
+    local-dns: 127.0.0.1:6969 
+```
+### upstream-dns
+Setting upstream dns IP address and port
+field type - upstream-dns: <IP>:<port>
+For example:
+```text
+    upstream-dns: 9.9.9.9:53
+```
+
+### blacklist
+Setting blacklist with domains and different actions for them.
+
+Actions:
+- refuse - insert in header status REFUSE (RCODE=5)
+- not_found - insert in header status NXDOMAIN (Name Error  RCODE=3)
+- <IP> - building answer section with desired <IP>
+
 # System testing environment
 To prepare testing environment run test_env.sh script or create virtual environment and install pytest module by yourself with pip or wheel.
 
