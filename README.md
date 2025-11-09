@@ -174,7 +174,13 @@ Tested with util dig (DNS lookup utility)
 ### Domain from blacklist REFUSE type:
 
 test_blacklist_refused in pytest env.
-Running dig with domain name in blacklist with tag 'refuse':
+1.Running proxy-dns server with config:
+
+```bash
+    ./build/proxy-dns tests/test_blacklist_refused.config
+```
+
+2.Running dig with domain name in blacklist with tag 'refuse':
 
 ```bash
     dig @127.0.0.1 -p 6969 google.com
@@ -189,7 +195,13 @@ Expected output status is REFUSED:
 ### Domain from blacklist NOT_FOUND type:
 
 test_blacklist_not_found in pytest env
-Running dig with domain name in blacklist with tag 'not_found':
+1.Running proxy-dns server with config:
+
+```bash
+    ./build/proxy-dns tests/test_blacklist_not_found.config
+```
+
+2.Running dig with domain name in blacklist with tag 'not_found':
 
 ```bash
     dig @127.0.0.1 -p 6969 ya.ru
@@ -204,7 +216,13 @@ Expected output status is REFUSED:
 ### Domain from blacklist with READDRESSING type:
 
 test_blacklist_readressing in pytest env
-Running dig with domain name in blacklist with readressing IP '10.10.10.10':
+1.Running proxy-dns server with config:
+
+```bash
+    ./build/proxy-dns tests/test_blacklist_readressing.config
+```
+
+2.Running dig with domain name in blacklist with readressing IP '10.10.10.10':
 
 ```bash
     dig @127.0.0.1 -p 6969 ya.ru
@@ -225,7 +243,13 @@ Expected IP from answer section is 10.10.10.10:
 ### Existed domain not from blacklist:
 
 test_existed_domain in pytest env
-Running dig with domain name not in blacklist 'github.com':
+1.Running proxy-dns server with config:
+
+```bash
+    ./build/proxy-dns tests/test_existed_domain.config
+```
+
+2.Running dig with domain name not in blacklist 'github.com':
 
 ```bash
     dig @127.0.0.1 -p 6969 github.com
@@ -240,7 +264,13 @@ Expected output status is NOERROR:
 ### Not existed domain not from blacklist:
 
 test_not_existed_domain in pytest env
-Running dig with domain name not in blacklist and with random name to forward to upstream dns 9.9.9.9:53:
+1.Running proxy-dns server with config:
+
+```bash
+    ./build/proxy-dns tests/test_not_existed_domain.config
+```
+
+2.Running dig with domain name not in blacklist and with random name to forward to upstream dns 9.9.9.9:53:
 
 ```bash
     dig @127.0.0.1 -p 6969 googlerrob.com.123.123
@@ -255,7 +285,13 @@ Expected output status is NXDOMAIN:
 ### Not existed upstream DNS:
 
 test_not_existed_upstream in pytest env
-Running dig with domain name not in blacklist 'github.com' to forward to not existed upstream dns 119.119.119.119:53:
+1.Running proxy-dns server with config:
+
+```bash
+    ./build/proxy-dns tests/test_not_existed_upstream.config
+```
+
+2.Running dig with domain name not in blacklist 'github.com' to forward to not existed upstream dns 119.119.119.119:53:
 
 ```bash
     dig @127.0.0.1 -p 6969 github.com
@@ -270,7 +306,13 @@ Expected output status is SERVFAIL:
 ### Existed upstream DNS:
 
 test_existed_upstream in pytest env
-Running dig with domain name not in blacklist 'github.com' to forward to existing upstream 9.9.9.9:53:
+1.Running proxy-dns server with config:
+
+```bash
+    ./build/proxy-dns tests/test_existed_upstream.config
+```
+
+2.Running dig with domain name not in blacklist 'github.com' to forward to existing upstream 9.9.9.9:53:
 
 ```bash
     dig @127.0.0.1 -p 6969 github.com
@@ -285,7 +327,13 @@ Expected output status is NOERROR:
 ### Correct queries with huge blacklist:
 
 test_correct_queries_with_huge_blacklist in pytest env
-Running dig with domain name not in blacklist 'github.com' to compare parsing time with default timeouts for huge blacklist:
+1.Running proxy-dns server with config:
+
+```bash
+    ./build/proxy-dns tests/test_existed_upstream.config
+```
+
+2.Running dig with domain name not in blacklist 'github.com' to compare parsing time with default timeouts for huge blacklist:
 
 ```bash
     dig @127.0.0.1 -p 6969 github.com
