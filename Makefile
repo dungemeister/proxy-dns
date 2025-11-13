@@ -1,5 +1,5 @@
 APP := proxy-dns
-FLAGS := -Wall -Wextra -Wpedantic -g -O0
+FLAGS := -Wall -Wextra -Wpedantic -g -O0 -lpthread
 BUILD_DIR := build
 
 .PHONY: all

@@ -11,6 +11,7 @@
 #include <stdbool.h>
 #include <sys/time.h>
 #include <assert.h>
+#include <pthread.h>
 
 #define CONFIG_LOCAL_IP                 ("127.0.0.1")
 #define CONFIG_LOCAL_PORT               (6969)
@@ -19,6 +20,7 @@
 
 #define LINE_BUFFER_SIZE                (2048)
 #define CLIENT_BUFFER_SIZE              (256)
+#define DOMAIN_NAME_BUFFER_SIZE         (256)
 
 #define MAX_BLACKLIST_DOMAINS           (100)
 #define BLACKLIST_TYPE_REFUSE_CHAR      ("refuse")
@@ -157,6 +159,28 @@ typedef enum{
 #define DNS_QUESTION_SECTION_OFFSET (sizeof(DnsQueryHeader_t))
 #define DNS_HEADER_SECTION_SIZE     DNS_QUESTION_SECTION_OFFSET
 
+
+#define MAX_THREADS_SIZE (100)
+
+typedef struct{
+    struct client_data{
+        struct sockaddr_in client_addr;
+        socklen_t client_len;
+        int client_sockfd;
+        char buffer[CLIENT_BUFFER_SIZE];
+        int data_len;
+    }tasks[MAX_THREADS_SIZE];
+
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    int front, rear, count;
+}TaskQueue_t;
+
+typedef struct{
+    TaskQueue_t* queue;
+    DnsServer_t* server;
+}WorketArgs_t;
+
 //Declaration functions as API
 static int  parse_config_file   (DnsServer_t* server, const char* config_file);
 static int  create_dns_server   (DnsServer_t* server);
@@ -175,6 +199,12 @@ static void parse_question_section  (char* buffer, char* domain);
 static void build_blocked_response  (char *buffer, int *len, char *query, BlacklistDomain_t type);
 static void build_fail_response     (char *buffer, int *len, char *query, CustomResponse_t domain);
 static int  forward_to_upstream     (char* query, int query_len, char* response, int response_buf_size, DnsServer_t* server);
+
+static void init_queue(TaskQueue_t* queue);
+static void run_pthread_pool(pthread_t* threads, size_t threads_size, void*(*func)(void*), WorketArgs_t* args);
+static void enqueue_task(TaskQueue_t* queue, struct client_data task);
+static struct client_data dequeue_task(TaskQueue_t* queue);
+static void* thread_worker(void* arg);
 
 //Implementation
 
@@ -245,6 +275,24 @@ static BlacklistDomain_t get_domain_from_string(DomainList_t* blacklist, char* d
         }
     }
     assert(false && "Cannot find domain in blacklist");
+}
+
+static char* get_domain_type_humanreadable(DomainList_t* blacklist, char* domain){
+    BlacklistDomainType_t type = get_domain_type(blacklist, domain);
+    BlacklistDomain_t dom = get_domain_from_string(blacklist, domain);
+    switch (type)
+    {
+    case BLACKLIST_DOMAIN_TYPE_NOT_FOUND:
+        return BLACKLIST_TYPE_NOT_FOUND_CHAR;
+    
+    case BLACKLIST_DOMAIN_TYPE_REFUSED:
+        return BLACKLIST_TYPE_REFUSE_CHAR;
+    case BLACKLIST_DOMAIN_TYPE_REDIRECT:
+        struct in_addr ip = {dom.redirect_ip};
+        return inet_ntoa(ip);
+    default:
+        return "Unknown";
+    }
 }
 
 static void trim_whitespace(char *str) {
@@ -551,55 +599,60 @@ static void build_fail_response(char *buffer, int *len, char *query, CustomRespo
 }
 
 static void serve_proxy_dns(DnsServer_t* server){
-    char buffer[CLIENT_BUFFER_SIZE];
+    char recv_buffer[CLIENT_BUFFER_SIZE];
+    
+    pthread_t threads[MAX_THREADS_SIZE];
+    TaskQueue_t queue;
+    init_queue(&queue);
+
+    WorketArgs_t args = {0};
+    args.queue = &queue;
+    args.server = server;
+    run_pthread_pool(threads, 10, thread_worker, &args);
 
     char domain_name_buffer[256];
-    char upstream_response[CLIENT_BUFFER_SIZE];
 
-    while(true){
-        memset(buffer, 0x0, sizeof(buffer));
-        
+    while(1){
         struct sockaddr_in client_addr;
         socklen_t client_len = sizeof(client_addr);
-        
-        int recv_len = recvfrom(server->sock_fd, buffer, sizeof(buffer), 0,
-                               (struct sockaddr*)&client_addr, &client_len);
-        char client_ip[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
+        int client_sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+        int reuse_addr = 1;
+        setsockopt(client_sockfd, SOL_SOCKET, SO_REUSEADDR, &reuse_addr, sizeof(reuse_addr));
 
-        if(recv_len < 0){
-            fprintf(stderr, "Recieve from client %s failed", client_ip);
+        if(client_sockfd < 0) {
+            perror("Client socket creation failed");
+            break;
+        }
+
+        int recv_len = recvfrom(server->sock_fd, recv_buffer, sizeof(recv_buffer), 0,
+                               (struct sockaddr*)&client_addr, &client_len);
+
+        if(recv_len <= 0){
+            close(client_sockfd);
             continue;
         }
-        const DnsQueryHeader_t* header = (DnsQueryHeader_t*)buffer;
-        (void)header;
+        struct sockaddr_in temp_addr;
+        socklen_t temp_len = sizeof(temp_addr);
+        temp_addr.sin_addr.s_addr = INADDR_ANY;
+        temp_addr.sin_family = AF_INET;
+        temp_addr.sin_port = htons(0);
 
-        void* question_section = buffer + DNS_QUESTION_SECTION_OFFSET;
-        parse_question_section((char*)question_section, domain_name_buffer);
-        
-        printf("Query from %s for: %s\n", client_ip, domain_name_buffer);
+        // printf("Received: %sFrom %s:%d\n", recv_buffer, inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+        if(bind(client_sockfd, (struct sockaddr*)&temp_addr, temp_len) == 0){
 
-        bool res = is_domain_blacklisted(&server->conf.blacklist, domain_name_buffer);
-        if(res){
-            // printf("%s is in blacklist\n", domain_name_buffer);
-            BlacklistDomain_t domain = get_domain_from_string(&server->conf.blacklist, domain_name_buffer);
-            build_blocked_response(buffer, &recv_len, buffer, domain);
-            sendto(server->sock_fd, buffer, recv_len, 0,
-                    (struct sockaddr*)&client_addr, client_len);
+            struct client_data task;
+            task.client_addr = client_addr;
+            task.client_len = client_len;
+            task.client_sockfd = client_sockfd;
+            task.data_len = recv_len;
+            memmove(task.buffer, recv_buffer, sizeof(recv_buffer));
+
+            enqueue_task(&queue, task);
         }
         else{
-            int response_len = forward_to_upstream(buffer, recv_len, upstream_response, sizeof(upstream_response), server);
-                
-            if(response_len > 0) {
-                sendto(server->sock_fd, upstream_response, response_len, 0,
-                        (struct sockaddr*)&client_addr, client_len);
-                printf("Forwarded response for: %s (%d bytes)\n", domain_name_buffer, response_len);
-            }
-            else{
-                build_fail_response(buffer, &recv_len, buffer, CUSTOM_RESPONSE_SERVER_FAILURE);
-                sendto(server->sock_fd, buffer, recv_len, 0,
-                    (struct sockaddr*)&client_addr, client_len);
-            }
+            perror("Fail to bind socket to client addr");
+            close(client_sockfd);
+            sleep(1);
         }
     }
 }
@@ -638,4 +691,100 @@ static int create_dns_socket(uint32_t addr, int port) {
     
     return sock_fd;
 }
+
+static void init_queue(TaskQueue_t* queue){
+    queue->count = 0;
+    queue->front = 0;
+    queue->rear = 0;
+    pthread_mutex_init(&queue->mutex, NULL);
+    pthread_cond_init(&queue->cond, NULL);
+
+}
+
+static void enqueue_task(TaskQueue_t* queue, struct client_data task){
+    pthread_mutex_lock(&queue->mutex);
+    queue->tasks[queue->rear] = task;
+    queue->rear = (queue->rear + 1) % MAX_THREADS_SIZE;
+    queue->count++;
+    pthread_cond_signal(&queue->cond);
+    pthread_mutex_unlock(&queue->mutex);
+}
+
+static struct client_data dequeue_task(TaskQueue_t* queue){
+
+    pthread_mutex_lock(&queue->mutex);
+    if(queue->count == 0)
+        pthread_cond_wait(&queue->cond, &queue->mutex);
+
+    struct client_data task = {0};
+    task = queue->tasks[queue->front];
+    queue->front = (queue->front + 1) % MAX_THREADS_SIZE;
+    queue->count--;
+
+    pthread_mutex_unlock(&queue->mutex);
+
+    return task;
+}
+
+static void* thread_worker(void* arg){
+    WorketArgs_t* worket_args = arg;
+    TaskQueue_t* queue = worket_args->queue;
+    DnsServer_t* server = worket_args->server;
+
+    // printf("Start worker. Queue: %p Server: %p\n", (void*)queue, (void*)server);
+    char domain_name_buffer[DOMAIN_NAME_BUFFER_SIZE] = {0};
+    char upstream_response[CLIENT_BUFFER_SIZE] = {0};
+
+    while(1){
+        struct client_data task = dequeue_task(queue);
+        if(task.client_sockfd <= 0) continue;
+
+        const DnsQueryHeader_t* header = (DnsQueryHeader_t*)task.buffer;
+        (void)header;
+
+        void* question_section = task.buffer + DNS_QUESTION_SECTION_OFFSET;
+        parse_question_section((char*)question_section, domain_name_buffer);
+        
+        printf("DNS Query from %s:%d for: %s\n", inet_ntoa(task.client_addr.sin_addr), ntohs(task.client_addr.sin_port), domain_name_buffer);
+
+        bool res = is_domain_blacklisted(&server->conf.blacklist, domain_name_buffer);
+        if(res){
+            char* humanreadable_type = get_domain_type_humanreadable(&server->conf.blacklist, domain_name_buffer);
+            printf("%s is in blacklist: %s\n", domain_name_buffer, humanreadable_type);
+            BlacklistDomain_t domain = get_domain_from_string(&server->conf.blacklist, domain_name_buffer);
+            build_blocked_response(task.buffer, &task.data_len, task.buffer, domain);
+            sendto(server->sock_fd, task.buffer, task.data_len, 0,
+                    (struct sockaddr*)&task.client_addr, task.client_len);
+        }
+        else{
+            int response_len = forward_to_upstream(task.buffer, task.data_len, upstream_response, sizeof(upstream_response), server);
+                
+            if(response_len > 0) {
+                sendto(server->sock_fd, upstream_response, response_len, 0,
+                        (struct sockaddr*)&task.client_addr, task.client_len);
+                printf("Forwarded response for: %s (%d bytes)\n", domain_name_buffer, response_len);
+            }
+            else{
+                build_fail_response(task.buffer, &task.data_len, task.buffer, CUSTOM_RESPONSE_SERVER_FAILURE);
+                sendto(server->sock_fd, task.buffer, task.data_len, 0,
+                    (struct sockaddr*)&task.client_addr, task.client_len);
+            }
+        }
+
+        close(task.client_sockfd);
+    }
+    return NULL;
+}
+
+static void run_pthread_pool(pthread_t* threads, size_t threads_size, void*(*func)(void*), WorketArgs_t* args){
+    int qty = (threads_size > MAX_THREADS_SIZE)? MAX_THREADS_SIZE : threads_size;
+    for(int i = 0; i < qty; i++){
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        if(pthread_create(&threads[i], &attr, func, args) != 0){
+            perror("Fail to create pthread");
+        }
+    }
+}
+
 #endif //_PROXY_DNS_H

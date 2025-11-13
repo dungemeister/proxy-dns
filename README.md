@@ -1,6 +1,6 @@
 # proxy-dns
 
-One header file proxy-dns.h library. Configurable proxy-dns server.
+One header file proxy-dns.h linux only library. Configurable proxy-dns server.
 
 # Description
     
@@ -15,7 +15,13 @@ Other posible RCODES:
 
 # Dependencies
 
-Independent one header file library from scratch.
+Dependencies: pthread
+
+To build your app with current library link pthread library as linker flag:
+
+```bash
+-lpthread
+```
 
 # Build
 To build project use:
@@ -351,11 +357,10 @@ Expected output status is NOERROR:
 - Only userspace local ports > 1024
 
 # WARNINGS
-- Handling queries in single thread
+- Handling queries in multithread mode
 - Necessary fields in config file: 'local-dns:', 'upstream-dns:', 'blacklist:'
 - Broken trim_whitespaces function
 - Limitted length of the input line buffer. Look at preprocessed variable LINE_BUFFER_SIZE.
-- Blacklist can contain already appended domain name
 
 # ERRATA
 - Segfault with broken config
@@ -363,7 +368,7 @@ Expected output status is NOERROR:
 
 # TODO
 - [x] ~~Update config file and parsing for future features~~
-- [ ] Add POSIX threads to handle simultaneous connections
+- [x] ~~Add POSIX threads to handle simultaneous connections~~
 - [ ] Unit tests
 - [x] ~~Add default params for proxy server~~
 - [x] ~~Add signals handling for app~~
