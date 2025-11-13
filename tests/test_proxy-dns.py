@@ -1,4 +1,4 @@
-import subprocess, psutil
+import subprocess, psutil, pytest
 from subprocess import Popen, PIPE, STDOUT
 import os
 
@@ -48,8 +48,9 @@ def kill_process_tree(pid):
     except psutil.NoSuchProcess:
         pass
 
+
 def test_blacklist_refused():
-    blacklist = ["google.com"]
+    blacklist = ["google.com", "ya.ru", "yandex.ru"]
     process = start_proxy_dns(f"{TESTS_DIR}/{test_blacklist_refused.__name__}.config")
     for domain in blacklist:
         output = start_dig("127.0.0.1", "6969", domain)
@@ -57,7 +58,7 @@ def test_blacklist_refused():
     kill_process_tree(process.pid)
 
 def test_blacklist_not_found():
-    blacklist = ["ya.ru"]
+    blacklist = ["google.com", "ya.ru", "yandex.ru"]
     process = start_proxy_dns(f"{TESTS_DIR}/{test_blacklist_not_found.__name__}.config")
     for domain in blacklist:
         output = start_dig("127.0.0.1", "6969", domain)
@@ -65,7 +66,8 @@ def test_blacklist_not_found():
     kill_process_tree(process.pid)
 
 def test_blacklist_readressing():
-    blacklist = [("yandex.ru", "10.10.10.10")]
+    blacklist = [("google.com", "10.10.10.10"), ("ya.ru", "10.10.10.11"),
+                 ("yandex.ru", "10.10.10.12")]
     process = start_proxy_dns(f"{TESTS_DIR}/{test_blacklist_readressing.__name__}.config")
     for domain, r_ip in blacklist:
         output = start_dig("127.0.0.1", "6969", domain)
@@ -114,4 +116,4 @@ def test_correct_queries_with_huge_blacklist():
 
 
 if __name__ == "__main__":
-    test_not_existed_upstream()
+    pytest.main(["-v"])
