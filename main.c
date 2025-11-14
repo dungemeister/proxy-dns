@@ -51,7 +51,7 @@ int main(int argc, char** argv){
     }
 
     //Create dns server
-    if((res = create_dns_server(&proxy_server)) < 0){
+    if((res = init_dns_server(&proxy_server)) < 0){
         return res;
     }
     
