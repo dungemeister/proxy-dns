@@ -1,12 +1,13 @@
 APP := proxy-dns
 FLAGS := -Wall -Wextra -Wpedantic -g -O0 -lpthread
+DEBUG_FLAGS := ${FLAGS} -DDEBUG
 BUILD_DIR := build
 
 .PHONY: all
 all: ${APP}
 
 ${APP}: ${BUILD_DIR} main.c
-	cc $(FLAGS) main.c -o ${BUILD_DIR}/$(APP)
+	cc $(DEBUG_FLAGS) main.c -o ${BUILD_DIR}/$(APP)
 
 ${BUILD_DIR}:
 	mkdir -p ${BUILD_DIR}
