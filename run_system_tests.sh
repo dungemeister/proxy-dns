@@ -1,7 +1,8 @@
 #!/bin/sh
 set -e
-
+#Parsing args
 SCRIPT_DIR=$(dirname $0)
+#Prepare vars
 ENV_DIR=${SCRIPT_DIR}/venv
 TEST_DIR=${SCRIPT_DIR}/tests
 
