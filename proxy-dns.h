@@ -110,11 +110,13 @@ typedef struct {
     DomainList_t    blacklist;
 }DnsServerConfig_t;
 
-#define MAX_CACHE_ENTRY     (100)
+#define MAX_CACHE_ENTRY         (100)
+#define FAILED_QUERY_ENTRY_TTL  (10)
 
 typedef struct DnsCacheEntry_t{
     BlacklistDomain_t domain;
     unsigned char response[CLIENT_BUFFER_SIZE];
+    size_t resp_status;
     size_t response_len;
     time_t timestamp;
     int ttl;
@@ -202,45 +204,52 @@ typedef struct{
 
 #ifdef DEBUG
     #define WORKER_DEBUG(format, ...) printf("[WORKER]: " format, ##__VA_ARGS__)
+    #define CONFIG_PARSER_DEBUG(format, ...) printf("[CONFIG_PARSER]: " format, ##__VA_ARGS__)
+    #define CACHE_DEBUG(format, ...) printf("[CONFIG_PARSER]: " format, ##__VA_ARGS__)
 #else
     #define WORKER_DEBUG(format, ...) 
-
+    #define CONFIG_PARSER_DEBUG(format, ...) 
+    #define CACHE_DEBUG(format, ...) 
 #endif // DEBUG
+
+#define SERVER_ERROR_MSG(msg) perror("[SERVER]: "msg)
+#define WORKER_ERROR_MSG(msg) perror("[WORKER]: "msg)
 
 //Declaration functions as API
 static int  parse_config_file   (DnsServer_t* server, const char* config_file);
-static int  init_dns_server   (DnsServer_t* server);
+static int  init_dns_server     (DnsServer_t* server);
 static void serve_proxy_dns     (DnsServer_t* server);
 static void proxy_dns_shutdown  (DnsServer_t* server);
 //Declaration internal dunctions
 static void add_domain_to_blacklist (DomainList_t* blacklist, char* domain, BlacklistDomainType_t type, uint32_t redirect_ip);
 static bool is_domain_blacklisted   (DomainList_t* blacklist, char* domain);
 
-static int  create_dns_socket(uint32_t addr, int port);
+static int  create_dns_socket   (uint32_t addr, int port);
 
 static void     trim_whitespace (char *str);
 static uint32_t ip_to_uint32    (const char* ip_address_str);
 
-static int parse_question_section  (char* buffer, char* domain);
-static void build_client_response  (char *buffer, int *len, char *query, BlacklistDomain_t type);
-static void build_fail_response     (char *buffer, int *len, char *query, CustomResponse_t domain);
-static int  forward_to_upstream     (char* query, int query_len, char* response, int response_buf_size, DnsServer_t* server);
+static DnsQueryHeader_t parse_header_section    (char* buffer);
+static int              parse_question_section  (char* buffer, char* domain);
+static void             build_client_response   (char *buffer, int *len, char *query, BlacklistDomain_t type);
+static void             build_fail_response     (char *buffer, int *len, char *query, CustomResponse_t domain);
+static int              forward_to_upstream     (char* query, int query_len, char* response, int response_buf_size, DnsServer_t* server);
 
-static void init_queue(TaskQueue_t* queue);
-static void run_pthread_pool(pthread_t* threads, size_t threads_size, void*(*func)(void*), WorketArgs_t* args);
-static void enqueue_task(TaskQueue_t* queue, struct client_data task);
-static struct client_data dequeue_task(TaskQueue_t* queue);
-static void* thread_worker(void* arg);
+static void                 init_queue              (TaskQueue_t* queue);
+static void                 run_pthread_pool        (pthread_t* threads, size_t threads_size, void*(*func)(void*), WorketArgs_t* args);
+static void                 enqueue_task            (TaskQueue_t* queue, struct client_data task);
+static struct client_data   dequeue_task            (TaskQueue_t* queue);
+static void*                thread_worker           (void* arg);
 
-static int init_cache_table(DnsCacheTable_t* cache);
-static int add_cache_entry(DnsCacheTable_t* cache, DnsCacheEntry_t* entry);
-static DnsCacheEntry_t* get_cache_entry(DnsCacheTable_t* cache, char* entry);
-static int remove_cache_entry(DnsCacheTable_t* cache, DnsCacheEntry_t* entry);
-
+static int              init_cache_table            (DnsCacheTable_t* cache);
+static int              add_cache_entry             (DnsCacheTable_t* cache, DnsCacheEntry_t* entry);
+static DnsCacheEntry_t* get_cache_entry             (DnsCacheTable_t* cache, char* entry);
+static int              remove_cache_entry          (DnsCacheTable_t* cache, DnsCacheEntry_t* entry);
+static int              get_cache_size              (DnsCacheTable_t* cache);
 //Implementation
 
 static inline void print_config_local_dns_help(){
-    printf("Usage:\n\tlocal-dns: 127.0.0.1:6969\nSpace between tokens is necessary");
+    CONFIG_PARSER_DEBUG("Usage:\n\tlocal-dns: 127.0.0.1:6969\nSpace between tokens is necessary");
 }
 
 static void print_config_params(DnsServerConfig_t* conf){
@@ -248,10 +257,10 @@ static void print_config_params(DnsServerConfig_t* conf){
     struct in_addr ip = {0};
     
     ip.s_addr = htonl(conf->local_ip);
-    printf("Local DNS: %s:%d\n", inet_ntoa(ip), conf->local_port);
+    CONFIG_PARSER_DEBUG("Local DNS: %s:%d\n", inet_ntoa(ip), conf->local_port);
 
     ip.s_addr = htonl(conf->upstream_ip);
-    printf("Upstream DNS: %s:%d\n", inet_ntoa(ip), conf->upstream_port);
+    CONFIG_PARSER_DEBUG("Upstream DNS: %s:%d\n", inet_ntoa(ip), conf->upstream_port);
 }
 
 static void apply_default_config(DnsServerConfig_t* conf){
@@ -263,15 +272,15 @@ static void apply_default_config(DnsServerConfig_t* conf){
 
 static void add_domain_to_blacklist(DomainList_t* blacklist, char* domain, BlacklistDomainType_t type, uint32_t redirect_ip){
     if((blacklist->size + 1) > MAX_BLACKLIST_DOMAINS){
-        fprintf(stderr, "Failed to add domain %s. Overflow\n", domain);
+        CONFIG_PARSER_DEBUG("WARNING: Failed to add domain %s. Overflow\n", domain);
         return;
     }
     if(domain == NULL) {
-        fprintf(stderr, "WARNING: domain name is %s\n", domain);
+        CONFIG_PARSER_DEBUG("WARNING: domain name is %s\n", domain);
         return;
     }
     if(is_domain_blacklisted(blacklist, domain)){
-        fprintf(stderr, "WARNING: domain '%s' already blacklisted. Ignored\n", domain);
+        CONFIG_PARSER_DEBUG("WARNING: domain '%s' already blacklisted. Ignored\n", domain);
         return;
     }
     strcpy(blacklist->domains[blacklist->size].name, domain);
@@ -371,7 +380,7 @@ static BlacklistDomainType_t get_domain_type_from_string(char* type){
 static int parse_config_file(DnsServer_t* server, const char* config_file){
     FILE* cf = fopen(config_file, "r");
     if(cf == NULL){
-        fprintf(stderr, "Fail to open config file '%s'\n", config_file);
+        CONFIG_PARSER_DEBUG("Fail to open config file '%s'\n", config_file);
         return -1;
     }
 
@@ -425,7 +434,7 @@ static int parse_config_file(DnsServer_t* server, const char* config_file){
                     if(type == BLACKLIST_DOMAIN_TYPE_REDIRECT) redirect_ip = ip_to_uint32(action_or_ip);
                         
                     add_domain_to_blacklist(&server->conf.blacklist, domain, type, redirect_ip);
-                    printf("Added to blacklist: %s-%s\n", domain, action_or_ip);
+                    CONFIG_PARSER_DEBUG("Added to blacklist: %s-%s\n", domain, action_or_ip);
 
                 }
             }
@@ -470,7 +479,7 @@ static int get_qname_from_section_start(char* src_buffer, char* name_buf){
     int offset = 0;
     int data_offset = 0;
     if((src_buffer[offset] & 0xC0) == 0xC0){
-        printf("WARNING: compressed qname\n");
+        WORKER_DEBUG("WARNING: compressed qname\n");
         return 2;
     }
     while(src_buffer[offset] != 0){
@@ -482,6 +491,18 @@ static int get_qname_from_section_start(char* src_buffer, char* name_buf){
             name_buf[data_offset++] = 0x2E;
     }
     return offset + 1;
+}
+
+static DnsQueryHeader_t parse_header_section(char* buffer){
+    DnsQueryHeader_t header = {0};
+    header.id       = ntohs(*(uint16_t*)buffer);
+    header.flags    = ntohs(*(uint16_t*)(buffer + sizeof(uint16_t)));
+    header.qdcount  = ntohs(*(uint16_t*)(buffer + 2 * sizeof(uint16_t)));
+    header.ancount  = ntohs(*(uint16_t*)(buffer + 3 * sizeof(uint16_t)));
+    header.nscount  = ntohs(*(uint16_t*)(buffer + 4 * sizeof(uint16_t)));
+    header.arcount  = ntohs(*(uint16_t*)(buffer + 5 * sizeof(uint16_t)));
+
+    return header;
 }
 
 static int parse_question_section(char* buffer, char* domain_buf){
@@ -503,18 +524,18 @@ static int parse_answer_section(char* buffer, uint32_t* ip){
     r_opts.rclass = ntohs(*(uint16_t*)(buffer + qname_size + sizeof(uint16_t)));
     r_opts.ttl = ntohl(*(uint32_t*)(buffer + qname_size + 2 * sizeof(uint16_t)));
     r_opts.length = ntohs(*(uint16_t*)(buffer + qname_size + 2 * sizeof(uint16_t) + sizeof(uint32_t)));
-    assert(r_opts.length == 4 && "Response data is not IPv4. Works with IPv4 only");
 
     *ip = ntohl(*((uint32_t*)(buffer + qname_size + sizeof(DnsResponseOpts_t))));
-    printf("QNAME: %d\n", qname_size);
-    printf("RTYPE: %d\n", r_opts.rtype);
-    printf("RCLASS: %d\n", r_opts.rclass);
-    printf("RTTL: %d\n", r_opts.ttl);
-    printf("RLENGTH: %d\n", r_opts.length);
-    printf("Parsed IP: %u\n", *ip);
+    WORKER_DEBUG("QNAME: %d\n", qname_size);
+    WORKER_DEBUG("RTYPE: %d\n", r_opts.rtype);
+    WORKER_DEBUG("RCLASS: %d\n", r_opts.rclass);
+    WORKER_DEBUG("RTTL: %d\n", r_opts.ttl);
+    WORKER_DEBUG("RLENGTH: %d\n", r_opts.length);
+    WORKER_DEBUG("Parsed IP: %u\n", *ip);
     struct in_addr r_ip;
     r_ip.s_addr = htonl(*ip);
-    printf("Parsed IP str: %s\n", inet_ntoa(r_ip));
+    WORKER_DEBUG("Parsed IP str: %s\n", inet_ntoa(r_ip));
+    assert(r_opts.length == 4 && "Response data is not IPv4. Works with IPv4 only");
     return qname_size + sizeof(DnsResponseOpts_t) + r_opts.length;
 
 }
@@ -596,7 +617,7 @@ static void build_client_response(char *buffer, int *len, char *query, Blacklist
 static int forward_to_upstream(char* query, int query_len, char* response, int response_buf_size, DnsServer_t* server) {
     int sock_fd = socket(AF_INET, SOCK_DGRAM, 0);
     if(sock_fd < 0) {
-        perror("Socket creation failed");
+        WORKER_ERROR_MSG("Socket creation failed");
         return -1;
     }
     
@@ -616,7 +637,7 @@ static int forward_to_upstream(char* query, int query_len, char* response, int r
     // Send to upstream DNS
     if(sendto(sock_fd, query, query_len, 0, 
               (struct sockaddr*)&upstream_addr, sizeof(upstream_addr)) < 0) {
-        perror("Send to upstream failed");
+        WORKER_ERROR_MSG("Send to upstream failed");
         close(sock_fd);
         return -1;
     }
@@ -684,7 +705,7 @@ static void serve_proxy_dns(DnsServer_t* server){
         setsockopt(client_sockfd, SOL_SOCKET, SO_REUSEADDR, &reuse_addr, sizeof(reuse_addr));
 
         if(client_sockfd < 0) {
-            perror("Client socket creation failed");
+            SERVER_ERROR_MSG("Client socket creation failed");
             break;
         }
 
@@ -701,7 +722,6 @@ static void serve_proxy_dns(DnsServer_t* server){
         temp_addr.sin_family = AF_INET;
         temp_addr.sin_port = htons(0);
 
-        // printf("Received: %sFrom %s:%d\n", recv_buffer, inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
         if(bind(client_sockfd, (struct sockaddr*)&temp_addr, temp_len) == 0){
 
             struct client_data task;
@@ -714,7 +734,7 @@ static void serve_proxy_dns(DnsServer_t* server){
             enqueue_task(&queue, task);
         }
         else{
-            perror("Fail to bind socket to client addr");
+            SERVER_ERROR_MSG("Fail to bind socket to client addr");
             close(client_sockfd);
             sleep(1);
         }
@@ -730,13 +750,13 @@ static void proxy_dns_shutdown(DnsServer_t* server){
 static int create_dns_socket(uint32_t addr, int port) {
     int sock_fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock_fd < 0) {
-        perror("socket fd creation failed");
+        SERVER_ERROR_MSG("socket fd creation failed");
         return -1;
     }
     
     int optval = 1;
     if (setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) < 0) {
-        perror("socket setsockopt failed");
+        SERVER_ERROR_MSG("socket setsockopt failed");
         close(sock_fd);
         return -1;
     }
@@ -748,7 +768,7 @@ static int create_dns_socket(uint32_t addr, int port) {
     server_addr.sin_port = htons(port);
     
     if (bind(sock_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-        perror("socket bind failed");
+        SERVER_ERROR_MSG("socket  bind failed");
         close(sock_fd);
         return -1;
     }
@@ -843,11 +863,25 @@ static void* thread_worker(void* arg){
                 //Successed reply from upstream dns
                 if(response_len > 0) {
                     uint32_t parsed_ip = 0;
+                    DnsQueryHeader_t header = parse_header_section(upstream_response);
+                    WORKER_DEBUG("RESPONSE HEADER\n");
+                    WORKER_DEBUG("RESPONSE ID: 0x%x\n", header.id);
+                    WORKER_DEBUG("RESPONSE Flags: 0x%x\n", header.flags);
+                    WORKER_DEBUG("RESPONSE Questions: %d\n", header.qdcount);
+                    WORKER_DEBUG("RESPONSE Answer RRs: %d\n", header.ancount);
+                    WORKER_DEBUG("RESPONSE Authority RRs: %d\n", header.nscount);
+                    WORKER_DEBUG("RESPONSE Additional RRs: %d\n", header.arcount);
                     int q_size = parse_question_section(upstream_response + DNS_HEADER_SECTION_SIZE, entry.domain.name);
-                    WORKER_DEBUG("Q SECTION size: %d", q_size);
-                    WORKER_DEBUG("R SECTION offset: %ld", DNS_HEADER_SECTION_SIZE + q_size);
-                    parse_answer_section(upstream_response + DNS_HEADER_SECTION_SIZE + q_size, &parsed_ip);
+                    WORKER_DEBUG("Q SECTION size: %d\n", q_size);
+                    WORKER_DEBUG("R SECTION offset: %ld\n", DNS_HEADER_SECTION_SIZE + q_size);
+                    entry.resp_status = header.flags & DNS_HEADER_FLAGS_RCODE_MASK;
+                    if(header.ancount > 0){
+                        parse_answer_section(upstream_response + DNS_HEADER_SECTION_SIZE + q_size, &parsed_ip);
 
+                    }
+                    else{
+                        entry.ttl = FAILED_QUERY_ENTRY_TTL;
+                    }
                     sendto(server->sock_fd, upstream_response, response_len, 0,
                             (struct sockaddr*)&task.client_addr, task.client_len);
                     WORKER_DEBUG("Forwarded response for: %s (%d bytes)\n", domain_name_buffer, response_len);
@@ -870,11 +904,12 @@ static void* thread_worker(void* arg){
                 ip.s_addr = htonl(domain.redirect_ip);
                 WORKER_DEBUG("\tCached domain name: %s\n", domain.name);
                 WORKER_DEBUG("\tCached domain ip: %s\n", inet_ntoa(ip));
-                WORKER_DEBUG("\tCached domain ttl: ld\n", entry->ttl);
-
-                build_client_response(task.buffer, &task.data_len, task.buffer, domain);
-                sendto(server->sock_fd, task.buffer, task.data_len, 0,
-                            (struct sockaddr*)&task.client_addr, task.client_len);
+                WORKER_DEBUG("\tCached domain ttl: %d\n", entry->ttl);
+                if(entry->resp_status & DNS_HEADER_FLAGS_RCODE_MASK == DNS_HEADER_FLAGS_RCODE_NO_ERROR){
+                    build_client_response(task.buffer, &task.data_len, task.buffer, domain);
+                    sendto(server->sock_fd, task.buffer, task.data_len, 0,
+                                (struct sockaddr*)&task.client_addr, task.client_len);
+                }
             }
             
         }
@@ -890,7 +925,7 @@ static void run_pthread_pool(pthread_t* threads, size_t threads_size, void*(*fun
         pthread_attr_t attr;
         pthread_attr_init(&attr);
         if(pthread_create(&threads[i], &attr, func, args) != 0){
-            perror("Fail to create pthread");
+            SERVER_ERROR_MSG("Fail to create pthread");
         }
     }
 }
@@ -925,10 +960,10 @@ static int add_to_hash_table(DnsCacheEntry_t* hash_table, uint32_t hash, DnsCach
         memmove(&hash_table[hash], new_record, sizeof(DnsCacheEntry_t));
     }
     else{
-        printf("Collision detected\n");
+        CACHE_DEBUG("Collision detected\n");
         DnsCacheEntry_t* last_entry = (DnsCacheEntry_t*)&hash_table[hash];
         while(last_entry->next != NULL){
-            printf("Prev hash entry name: %s\n", last_entry->domain.name);
+            CACHE_DEBUG("Prev hash entry name: %s\n", last_entry->domain.name);
             last_entry = last_entry->next;
         }
         last_entry->next = new_record;
@@ -968,16 +1003,14 @@ static int add_cache_entry(DnsCacheTable_t* cache, DnsCacheEntry_t* entry){
     if(entry == NULL) return -1;
 
     uint32_t hash = get_string_hash(entry->domain.name, MAX_CACHE_ENTRY);
-    printf("%s HASH: %u\n", entry->domain.name, hash);
-
-    printf("hash_table: %p\n", cache->hash_table);
+    CACHE_DEBUG("%s HASH: %u\n", entry->domain.name, hash);
     if(add_to_hash_table(cache->hash_table, hash, entry) == 0){
         cache->size++;
     }
     else{
-        fprintf(stderr, "Fail to add entry %s to hashtable\n", entry->domain.name);
+        CACHE_DEBUG("ERROR: Fail to add entry %s to hashtable\n", entry->domain.name);
     }
-    printf("Cache table size: %lu\n", cache->size);
+    CACHE_DEBUG("Cache table size: %lu\n", cache->size);
     return 0;
 
 }
@@ -997,4 +1030,9 @@ static int remove_cache_entry(DnsCacheTable_t* cache, DnsCacheEntry_t* entry){
 
     return 0;
 }
+
+static int get_cache_size (DnsCacheTable_t* cache){
+    return cache->size;
+}
+
 #endif //_PROXY_DNS_H
