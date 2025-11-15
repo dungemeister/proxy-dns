@@ -112,7 +112,7 @@ typedef struct {
 
 #define CACHE_MAX_ENTRY                 (100)
 #define CACHE_FAILED_QUERY_ENTRY_TTL    (10)
-#define CACHE_CLEANUP_INTERVAL          (60)
+#define CACHE_CLEANUP_INTERVAL          (5)
 
 typedef struct DnsCacheEntry_t{
     BlacklistDomain_t domain;
@@ -209,10 +209,12 @@ typedef struct{
     #define WORKER_DEBUG(format, ...) printf("[WORKER]: " format, ##__VA_ARGS__)
     #define CONFIG_PARSER_DEBUG(format, ...) printf("[CONFIG_PARSER]: " format, ##__VA_ARGS__)
     #define CACHE_DEBUG(format, ...) printf("[CACHE_TABLE]: " format, ##__VA_ARGS__)
+    #define CACHE_VALIDATOR_DEBUG(format, ...) printf("[CACHE_VALIDATOR]: " format, ##__VA_ARGS__)
 #else
     #define WORKER_DEBUG(format, ...) 
     #define CONFIG_PARSER_DEBUG(format, ...) 
-    #define CACHE_DEBUG(format, ...) 
+    #define CACHE_DEBUG(format, ...)
+    #define CACHE_VALIDATOR_DEBUG(format, ...) 
 #endif // DEBUG
 
 #define SERVER_ERROR_MSG(msg) perror("[SERVER]: "msg)
@@ -1021,9 +1023,9 @@ static int remove_from_hash_table(DnsCacheEntry_t* hash_table, uint32_t hash, ch
 
 static DnsCacheEntry_t* get_from_hash_table(DnsCacheEntry_t* hash_table, uint32_t hash, char* entry_name){
     if(hash_table == NULL) return NULL;
-    
-    if(((DnsCacheEntry_t*)(&hash_table[hash]))->valid == 1){
-        DnsCacheEntry_t* cur_entry = &hash_table[hash];
+
+    DnsCacheEntry_t* cur_entry = &hash_table[hash];
+    if(cur_entry->valid == 1 || cur_entry->next != NULL){
         
         while(cur_entry->next != NULL){
             if(strcmp(cur_entry->domain.name, entry_name) == 0){
@@ -1070,7 +1072,7 @@ static DnsCacheEntry_t* get_cache_entry(DnsCacheTable_t* cache, char* entry_name
     DnsCacheEntry_t* entry = get_from_hash_table(cache->hash_table, hash, entry_name);
 
     if(entry == NULL){
-        CACHE_DEBUG("WARNING: fail to get entry from hash table");
+        CACHE_DEBUG("WARNING: fail to get entry from hash table\n");
     }
     
     pthread_rwlock_unlock(&cache->rwlock);
@@ -1135,20 +1137,22 @@ static void* get_cache_hash_table(DnsCacheTable_t* cache){
 
 static void* thread_cache_validator(void *arg) {
     DnsCacheTable_t* cache = (DnsCacheTable_t*)arg;
-    
+
     while (cache->active) {
         pthread_rwlock_wrlock(&cache->rwlock);
         time_t now = time(NULL);
-        
+        CACHE_VALIDATOR_DEBUG("Clearing %ld entries\n", cache->capacity);
         for (size_t i = 0; i < cache->capacity; i++) {
             DnsCacheEntry_t* entry = &((DnsCacheEntry_t*)(cache->hash_table))[i];
-            if (entry->valid && 
-                (now - entry->timestamp) > entry->ttl) {
+
+            if (entry->valid && (now > entry->timestamp + entry->ttl)) {
                 entry->valid = 0;
                 cache->size--;
+                CACHE_VALIDATOR_DEBUG("Found expired entry\n");
             }
         }
         pthread_rwlock_unlock(&cache->rwlock);
+        CACHE_VALIDATOR_DEBUG("Sleep %dsec\n", CACHE_CLEANUP_INTERVAL);
         sleep(CACHE_CLEANUP_INTERVAL); // Например, 60 секунд
     }
     return NULL;
