@@ -110,8 +110,9 @@ typedef struct {
     DomainList_t    blacklist;
 }DnsServerConfig_t;
 
-#define MAX_CACHE_ENTRY         (100)
-#define FAILED_QUERY_ENTRY_TTL  (10)
+#define CACHE_MAX_ENTRY                 (100)
+#define CACHE_FAILED_QUERY_ENTRY_TTL    (10)
+#define CACHE_CLEANUP_INTERVAL          (60)
 
 typedef struct DnsCacheEntry_t{
     BlacklistDomain_t domain;
@@ -128,7 +129,8 @@ typedef struct{
     void* hash_table;
     size_t size; 
     size_t capacity;
-    pthread_mutex_t mutex;
+    pthread_rwlock_t rwlock;
+    bool active;
 }DnsCacheTable_t;
 
 typedef struct {
@@ -206,7 +208,7 @@ typedef struct{
 #ifdef DEBUG
     #define WORKER_DEBUG(format, ...) printf("[WORKER]: " format, ##__VA_ARGS__)
     #define CONFIG_PARSER_DEBUG(format, ...) printf("[CONFIG_PARSER]: " format, ##__VA_ARGS__)
-    #define CACHE_DEBUG(format, ...) printf("[CACHE_PARSER]: " format, ##__VA_ARGS__)
+    #define CACHE_DEBUG(format, ...) printf("[CACHE_TABLE]: " format, ##__VA_ARGS__)
 #else
     #define WORKER_DEBUG(format, ...) 
     #define CONFIG_PARSER_DEBUG(format, ...) 
@@ -241,6 +243,7 @@ static void                 run_pthread_pool        (pthread_t* threads, size_t 
 static void                 enqueue_task            (TaskQueue_t* queue, struct client_data task);
 static struct client_data   dequeue_task            (TaskQueue_t* queue);
 static void*                thread_worker           (void* arg);
+static void*                thread_cache_validator  (void *arg);
 
 static int              init_cache_table            (DnsCacheTable_t* cache);
 static void             free_cache_table            (DnsCacheTable_t* cache);
@@ -473,7 +476,6 @@ static int init_dns_server(DnsServer_t* server){
     }
 
     if(init_cache_table(&server->cache) != 0){
-
         return -1;
     }
     return 0;
@@ -693,6 +695,7 @@ static void serve_proxy_dns(DnsServer_t* server){
     char recv_buffer[CLIENT_BUFFER_SIZE];
     
     pthread_t threads[MAX_THREADS_SIZE];
+    pthread_t cache_cleaner;
     TaskQueue_t queue;
     init_queue(&queue);
 
@@ -700,6 +703,8 @@ static void serve_proxy_dns(DnsServer_t* server){
     args.queue = &queue;
     args.server = server;
     run_pthread_pool(threads, 10, thread_worker, &args);
+    
+    pthread_create(&cache_cleaner, NULL, thread_cache_validator, (void*)&server->cache);
 
     while(1){
         struct sockaddr_in client_addr;
@@ -746,9 +751,12 @@ static void serve_proxy_dns(DnsServer_t* server){
 }
 
 static void proxy_dns_shutdown(DnsServer_t* server){
+    //TODO: add worker threads clearing
     if(server->sock_fd >= 0){
         close(server->sock_fd);
     }
+    
+    free_cache_table(&server->cache);
 }
 
 static int create_dns_socket(uint32_t addr, int port) {
@@ -837,7 +845,7 @@ static void* thread_worker(void* arg){
         // printf("[WORKER]: ""DNS Query from %s:%d for: %s\n", inet_ntoa(task.client_addr.sin_addr), ntohs(task.client_addr.sin_port), domain_name_buffer);
 
         bool res = is_domain_blacklisted(&server->conf.blacklist, domain_name_buffer);
-        // Send reply if domain blacklisted
+        // Send reply if domain is blacklisted
         if(res){
             char* humanreadable_type = get_domain_type_humanreadable(&server->conf.blacklist, domain_name_buffer);
             WORKER_DEBUG("%s is in blacklist: %s\n", domain_name_buffer, humanreadable_type);
@@ -846,7 +854,7 @@ static void* thread_worker(void* arg){
             sendto(server->sock_fd, task.buffer, task.data_len, 0,
                     (struct sockaddr*)&task.client_addr, task.client_len);
         }
-        // Send reply if domain does not blacklisted
+        // Send reply if domain is not blacklisted
         else{
             DnsCacheEntry_t entry = {0};
             memmove(entry.domain.name, domain_name_buffer, DOMAIN_NAME_BUFFER_SIZE);
@@ -860,8 +868,8 @@ static void* thread_worker(void* arg){
             entry.valid = 1;
 
             DnsCacheEntry_t* table_entry = get_cache_entry(&server->cache, entry.domain.name);
-            //Uncached domain
-            if(table_entry == NULL){
+            //Uncached domain or invalid entry
+            if(table_entry == NULL || table_entry->valid == 0){
                 
                 int response_len = forward_to_upstream(task.buffer, task.data_len, upstream_response, sizeof(upstream_response), server);
                 //Successed reply from upstream dns
@@ -884,7 +892,7 @@ static void* thread_worker(void* arg){
 
                     }
                     else{
-                        entry.ttl = FAILED_QUERY_ENTRY_TTL;
+                        entry.ttl = CACHE_FAILED_QUERY_ENTRY_TTL;
                     }
                     sendto(server->sock_fd, upstream_response, response_len, 0,
                             (struct sockaddr*)&task.client_addr, task.client_len);
@@ -937,10 +945,12 @@ static void run_pthread_pool(pthread_t* threads, size_t threads_size, void*(*fun
 static int init_cache_table(DnsCacheTable_t* cache){
     if(cache == NULL) return -1;
 
-    pthread_mutex_init(&cache->mutex, NULL);
-    cache->hash_table = calloc(MAX_CACHE_ENTRY, sizeof(DnsCacheEntry_t));
+    pthread_rwlock_init(&cache->rwlock, NULL);
+
+    cache->hash_table = calloc(CACHE_MAX_ENTRY, sizeof(DnsCacheEntry_t));
     cache->size = 0;
-    cache->capacity = MAX_CACHE_ENTRY;
+    cache->capacity = CACHE_MAX_ENTRY;
+    cache->active = true;
     return 0;
 }
 
@@ -1034,51 +1044,64 @@ static int add_cache_entry(DnsCacheTable_t* cache, DnsCacheEntry_t* entry){
     if(cache == NULL) return -1;
     if(entry == NULL) return -1;
 
-    uint32_t hash = get_string_hash(entry->domain.name, MAX_CACHE_ENTRY);
+    uint32_t hash = get_string_hash(entry->domain.name, CACHE_MAX_ENTRY);
     CACHE_DEBUG("%s HASH: %u\n", entry->domain.name, hash);
-    if(add_to_hash_table(cache->hash_table, hash, entry) == 0){
+    
+    pthread_rwlock_wrlock(&cache->rwlock);
+    int res = add_to_hash_table(cache->hash_table, hash, entry);
+    if(res == 0){
         cache->size++;
+        CACHE_DEBUG("Cache table size: %lu\n", cache->size);
     }
     else{
         CACHE_DEBUG("ERROR: Fail to add entry %s to hashtable\n", entry->domain.name);
-        return -1;
     }
-    CACHE_DEBUG("Cache table size: %lu\n", cache->size);
-    return 0;
+    pthread_rwlock_unlock(&cache->rwlock);
+    return res;
 
 }
 
-static DnsCacheEntry_t* get_cache_entry(DnsCacheTable_t* cache, char* entry){
+static DnsCacheEntry_t* get_cache_entry(DnsCacheTable_t* cache, char* entry_name){
     if(cache == NULL) return NULL;
-    if(entry == NULL) return NULL;
+    if(entry_name == NULL) return NULL;
 
-    uint32_t hash = get_string_hash(entry, MAX_CACHE_ENTRY);
+    uint32_t hash = get_string_hash(entry_name, CACHE_MAX_ENTRY);
+    pthread_rwlock_rdlock(&cache->rwlock);
+    DnsCacheEntry_t* entry = get_from_hash_table(cache->hash_table, hash, entry_name);
 
-    return get_from_hash_table(cache->hash_table, hash, entry);
+    if(entry == NULL){
+        CACHE_DEBUG("WARNING: fail to get entry from hash table");
+    }
+    
+    pthread_rwlock_unlock(&cache->rwlock);
+    return entry;
 }
 
 static int remove_cache_entry(DnsCacheTable_t* cache, char* entry_name){
     if(cache == NULL) return -1;
     if(entry_name == NULL) return -2;
 
-    uint32_t hash = get_string_hash(entry_name, MAX_CACHE_ENTRY);
-    if(remove_from_hash_table(cache->hash_table, hash, entry_name) == 0){
+    uint32_t hash = get_string_hash(entry_name, CACHE_MAX_ENTRY);
+    
+    pthread_rwlock_wrlock(&cache->rwlock);
+    int res = remove_from_hash_table(cache->hash_table, hash, entry_name);
+    if(res == 0){
         cache->size--;
+        CACHE_DEBUG("Cache table size: %lu\n", cache->size);
     }
     else{
         CACHE_DEBUG("ERROR: Fail to remove entry %s to hashtable\n", entry_name);
-        return -1;
     }
-    CACHE_DEBUG("Cache table size: %lu\n", cache->size);
-    return 0;
+    pthread_rwlock_unlock(&cache->rwlock);
+    return res;
 }
 
 static void free_cache_table (DnsCacheTable_t* cache){
-    pthread_mutex_unlock (&cache->mutex);
-    pthread_mutex_destroy(&cache->mutex);
+    pthread_rwlock_unlock (&cache->rwlock);
+    pthread_rwlock_destroy(&cache->rwlock);
     
     DnsCacheEntry_t* entry;
-    for(int i = 0; i < MAX_CACHE_ENTRY; ++i){
+    for(int i = 0; i < CACHE_MAX_ENTRY; ++i){
         entry = &((DnsCacheEntry_t*)cache->hash_table)[i];
         if(entry->valid == 1 && entry->next != NULL){
             
@@ -1095,17 +1118,39 @@ static void free_cache_table (DnsCacheTable_t* cache){
     cache->size = 0;
     cache->hash_table = NULL;
     cache->capacity = 0;
+    cache->active = false;
 }
 
 static int get_cache_size(DnsCacheTable_t* cache){
     return cache->size;
 }
 
-static pthread_mutex_t* get_cache_mutex(DnsCacheTable_t* cache){
-    return &cache->mutex;
+static pthread_rwlock_t* get_cache_mutex(DnsCacheTable_t* cache){
+    return &cache->rwlock;
 }
 
 static void* get_cache_hash_table(DnsCacheTable_t* cache){
     return cache->hash_table;
+}
+
+static void* thread_cache_validator(void *arg) {
+    DnsCacheTable_t* cache = (DnsCacheTable_t*)arg;
+    
+    while (cache->active) {
+        pthread_rwlock_wrlock(&cache->rwlock);
+        time_t now = time(NULL);
+        
+        for (size_t i = 0; i < cache->capacity; i++) {
+            DnsCacheEntry_t* entry = &((DnsCacheEntry_t*)(cache->hash_table))[i];
+            if (entry->valid && 
+                (now - entry->timestamp) > entry->ttl) {
+                entry->valid = 0;
+                cache->size--;
+            }
+        }
+        pthread_rwlock_unlock(&cache->rwlock);
+        sleep(CACHE_CLEANUP_INTERVAL); // Например, 60 секунд
+    }
+    return NULL;
 }
 #endif //_PROXY_DNS_H

@@ -35,7 +35,6 @@ void test_collision_cache(){
 void test_free_cache(){
     TEST_DEBUG(":\n");
     DnsCacheTable_t cache;
-    int result = 0;
     assert(0 == init_cache_table(&cache) && "FAIL: Fail to init cache table");
 
     add_cache_entry(&cache, &entry);
@@ -43,8 +42,9 @@ void test_free_cache(){
     free_cache_table(&cache);
     assert(0 == get_cache_size(&cache) && "FAIL: Expected cache size 0");
 
-    pthread_mutex_t* mutex = get_cache_mutex(&cache);
-    assert(0 == pthread_mutex_lock(mutex) && "FAIL: Expected cache mutex lock");
+    pthread_rwlock_t* rwlock = get_cache_mutex(&cache);
+    assert(0 == pthread_rwlock_rdlock(rwlock) && "FAIL: Expected cache correct rwlock lock");
+    assert(0 == pthread_rwlock_unlock(rwlock) && "FAIL: Expected cache correct rwlock unlock");
 
     assert(NULL == get_cache_hash_table(&cache) && "FAIL: Expected cache hashtable ptr NULL");
     TEST_DEBUG(": PASS\n");

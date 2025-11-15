@@ -376,3 +376,5 @@ Expected output status is NOERROR:
 - [x] ~~Add cache for requested domains~~
 - [x] ~~Add programm args parsing~~
 - [ ] Config hot reload
+- [ ] Add gracefull shutdown for worker threads
+- [x] Lazy cache expiration/ Active cache expiration

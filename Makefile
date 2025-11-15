@@ -1,5 +1,5 @@
 APP := proxy-dns
-FLAGS := -Wall -Wextra -Wpedantic -g -O0 -lpthread
+FLAGS := -Wall -Wextra -Wpedantic -g -O0 -lpthread -std=gnu99
 DEBUG_FLAGS := ${FLAGS} -DDEBUG
 BUILD_DIR := build
 
@@ -8,7 +8,7 @@ UNIT_TESTS_DIR := unit_tests
 CACHE_TESTS_DIR := cache_tests
 CACHE_TEST_BUILD_PATH := ${BUILD_DIR}/${UNIT_TESTS_DIR}
 CACHE_TEST_INC_DIRS := -I${UNIT_TESTS_DIR}/
-CACHE_TESTS_FLAGS := -Wall -Wextra -g -O2 -lpthread -DDEBUG ${CACHE_TEST_INC_DIRS} 
+CACHE_TESTS_FLAGS := -Wall -Wextra -g -O2 -lpthread -DDEBUG ${CACHE_TEST_INC_DIRS} -std=gnu99
 #Server tests
 SERVER_TESTS_DIR := server_tests
 SERVER_TEST_BUILD_PATH := ${BUILD_DIR}/${UNIT_TESTS_DIR}
