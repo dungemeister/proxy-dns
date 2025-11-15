@@ -68,26 +68,26 @@ File main.c demonstrates basic use of the library.
 ```c
 //main.c
 #include "proxy-dns.h"
-// int main()
 const char* config_file = "proxy.config";
+// int main()
 DnsServer_t proxy_server = {};
 
 ```
-2. Parsing config file
+2. Parsing config file. If it fails apply default config from defines
 
 ```c
 // int main()
 // ...
 if((res = parse_config_file(&proxy_server, config_file)) < 0){
-    return res;
+    apply_default_config(&proxy_server.conf);
 }
 ```
-3. Socket creation 
+3. Server initialization
 
 ```c
 // int main()
 // ...
-if((res = create_dns_server(&proxy_server)) < 0){
+if((res = init_dns_server(&proxy_server)) < 0){
     return res;
 }
 ```
@@ -369,10 +369,10 @@ Expected output status is NOERROR:
 # TODO
 - [x] ~~Update config file and parsing for future features~~
 - [x] ~~Add POSIX threads to handle simultaneous connections~~
-- [ ] Unit tests
+- [x] ~~Unit tests~~
 - [x] ~~Add default params for proxy server~~
 - [x] ~~Add signals handling for app~~
 - [x] ~~Add checking domain name while appending in blacklist~~
-- [ ] Add cache for requested domains
+- [x] ~~Add cache for requested domains~~
 - [x] ~~Add programm args parsing~~
 - [ ] Config hot reload
