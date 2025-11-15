@@ -2,7 +2,7 @@
 
 #define TEST_DEBUG(msg, ...) printf("%s"msg, __func__ , ##__VA_ARGS__)
 
-const BlacklistDomain_t domain = {
+const BlacklistDomain_t default_domain = {
     .name = "google.com",
     .redirect_ip = 0,
     .type = BLACKLIST_DOMAIN_TYPE_NOT_FOUND
@@ -15,7 +15,7 @@ DnsCacheEntry_t entry = {
     .resp_status = DNS_HEADER_FLAGS_RCODE_NO_ERROR,
     .response_len = 0,
     .timestamp = 0,
-    .domain = domain,
+    .domain = default_domain,
 };
 
 void test_collision_cache(){
@@ -101,11 +101,57 @@ void test_hash_table_collision_handling(){
     TEST_DEBUG(": PASS\n");
 }
 
+#ifdef CACHE_CLEANUP_INTERVAL
+#undef CACHE_CLEANUP_INTERVAL
+#define CACHE_CLEANUP_INTERVAL (2)
+#endif
+void test_validator(){
+    TEST_DEBUG(":\n");
+
+    pthread_t validator_th;
+    DnsCacheTable_t cache;
+    assert(0 == init_cache_table(&cache));
+
+    BlacklistDomain_t temp_domain = {
+        .name = "youtube.com",
+        .redirect_ip = 0,
+        .type = BLACKLIST_DOMAIN_TYPE_NOT_FOUND
+    };
+    entry.domain = temp_domain;
+    entry.valid = 1;
+    entry.timestamp = time(NULL);
+    entry.ttl = 1;
+    assert(0 == add_cache_entry(&cache, &entry));
+
+    sleep(2);
+    assert(0 == pthread_create(&validator_th, NULL, thread_cache_validator, (void*)&cache));
+    sleep(2);
+
+    char* domain_name = "youtube.com";
+    DnsCacheEntry_t* cur_entry = get_cache_entry(&cache, domain_name);
+    assert(cur_entry == NULL);
+
+    entry.domain = temp_domain;
+    entry.valid = 1;
+    entry.timestamp = time(NULL);
+    entry.ttl = 10;
+    assert(0 == add_cache_entry(&cache, &entry));
+    cur_entry = get_cache_entry(&cache, domain_name);
+    assert(cur_entry != NULL);
+
+    cache.active = false;
+    pthread_join(validator_th, NULL);
+    free_cache_table(&cache);
+
+    TEST_DEBUG(": PASS\n");
+}
+
 int main(int argc, char* argv[]){
     test_free_cache();
     test_collision_cache();
     test_remove_entry_cache();
-    
+
     test_hash_table_collision_handling();
+    test_validator();
     return 0;
 }
