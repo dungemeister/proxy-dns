@@ -127,6 +127,7 @@ typedef struct DnsCacheEntry_t{
 typedef struct{
     void* hash_table;
     size_t size; 
+    size_t capacity;
     pthread_mutex_t mutex;
 }DnsCacheTable_t;
 
@@ -205,7 +206,7 @@ typedef struct{
 #ifdef DEBUG
     #define WORKER_DEBUG(format, ...) printf("[WORKER]: " format, ##__VA_ARGS__)
     #define CONFIG_PARSER_DEBUG(format, ...) printf("[CONFIG_PARSER]: " format, ##__VA_ARGS__)
-    #define CACHE_DEBUG(format, ...) printf("[CONFIG_PARSER]: " format, ##__VA_ARGS__)
+    #define CACHE_DEBUG(format, ...) printf("[CACHE_PARSER]: " format, ##__VA_ARGS__)
 #else
     #define WORKER_DEBUG(format, ...) 
     #define CONFIG_PARSER_DEBUG(format, ...) 
@@ -242,9 +243,10 @@ static struct client_data   dequeue_task            (TaskQueue_t* queue);
 static void*                thread_worker           (void* arg);
 
 static int              init_cache_table            (DnsCacheTable_t* cache);
+static void             free_cache_table            (DnsCacheTable_t* cache);
 static int              add_cache_entry             (DnsCacheTable_t* cache, DnsCacheEntry_t* entry);
 static DnsCacheEntry_t* get_cache_entry             (DnsCacheTable_t* cache, char* entry);
-static int              remove_cache_entry          (DnsCacheTable_t* cache, DnsCacheEntry_t* entry);
+static int              remove_cache_entry          (DnsCacheTable_t* cache, char* entry);
 static int              get_cache_size              (DnsCacheTable_t* cache);
 //Implementation
 
@@ -378,6 +380,8 @@ static BlacklistDomainType_t get_domain_type_from_string(char* type){
 }
 
 static int parse_config_file(DnsServer_t* server, const char* config_file){
+    if(config_file == NULL) return -1;
+
     FILE* cf = fopen(config_file, "r");
     if(cf == NULL){
         CONFIG_PARSER_DEBUG("Fail to open config file '%s'\n", config_file);
@@ -905,7 +909,7 @@ static void* thread_worker(void* arg){
                 WORKER_DEBUG("\tCached domain name: %s\n", domain.name);
                 WORKER_DEBUG("\tCached domain ip: %s\n", inet_ntoa(ip));
                 WORKER_DEBUG("\tCached domain ttl: %d\n", entry->ttl);
-                if(entry->resp_status & DNS_HEADER_FLAGS_RCODE_MASK == DNS_HEADER_FLAGS_RCODE_NO_ERROR){
+                if((entry->resp_status & DNS_HEADER_FLAGS_RCODE_MASK) == DNS_HEADER_FLAGS_RCODE_NO_ERROR){
                     build_client_response(task.buffer, &task.data_len, task.buffer, domain);
                     sendto(server->sock_fd, task.buffer, task.data_len, 0,
                                 (struct sockaddr*)&task.client_addr, task.client_len);
@@ -933,10 +937,10 @@ static void run_pthread_pool(pthread_t* threads, size_t threads_size, void*(*fun
 static int init_cache_table(DnsCacheTable_t* cache){
     if(cache == NULL) return -1;
 
-    cache->size = 0;
     pthread_mutex_init(&cache->mutex, NULL);
     cache->hash_table = calloc(MAX_CACHE_ENTRY, sizeof(DnsCacheEntry_t));
-    
+    cache->size = 0;
+    cache->capacity = MAX_CACHE_ENTRY;
     return 0;
 }
 
@@ -958,6 +962,7 @@ static int add_to_hash_table(DnsCacheEntry_t* hash_table, uint32_t hash, DnsCach
 
     if(((DnsCacheEntry_t*)(&hash_table[hash]))->valid == 0){
         memmove(&hash_table[hash], new_record, sizeof(DnsCacheEntry_t));
+        free(new_record);
     }
     else{
         CACHE_DEBUG("Collision detected\n");
@@ -971,25 +976,52 @@ static int add_to_hash_table(DnsCacheEntry_t* hash_table, uint32_t hash, DnsCach
     return 0;
 }
 
-static int remove_from_hash_table(DnsCacheEntry_t* hash_table, uint32_t hash, DnsCacheEntry_t* entry){
+static int remove_from_hash_table(DnsCacheEntry_t* hash_table, uint32_t hash, char* entry_name){
     //Clear memory with memset for removed entry
 
-    return 0;
+    DnsCacheEntry_t* entry = &((DnsCacheEntry_t*)hash_table)[hash];
+    if(strcmp(entry->domain.name, entry_name) == 0){
+        DnsCacheEntry_t* tmp_entry = entry->next;
+        if(entry->next != NULL){
+            memmove(entry, entry->next, sizeof(DnsCacheEntry_t));
+            free(tmp_entry);
+            tmp_entry = NULL;
+        }
+        return 0;
+    }
+    else{
+        DnsCacheEntry_t* prev_entry = entry;
+        entry = entry->next;
+        while(entry != NULL){
+            if(strstr(entry->domain.name, entry_name) == 0){
+                break;
+            }
+            prev_entry = entry;
+            entry = entry->next;
+        }
+        if(entry != &((DnsCacheEntry_t*)hash_table)[hash]){
+            prev_entry->next = entry->next;
+            free(entry);
+            return 0;
+        }
+    }
+
+    return -1;
 }
 
-static DnsCacheEntry_t* get_from_hash_table(DnsCacheEntry_t* hash_table, uint32_t hash, char* entry){
+static DnsCacheEntry_t* get_from_hash_table(DnsCacheEntry_t* hash_table, uint32_t hash, char* entry_name){
     if(hash_table == NULL) return NULL;
     
     if(((DnsCacheEntry_t*)(&hash_table[hash]))->valid == 1){
         DnsCacheEntry_t* cur_entry = &hash_table[hash];
         
         while(cur_entry->next != NULL){
-            if(strcmp(cur_entry->domain.name, entry) == 0){
+            if(strcmp(cur_entry->domain.name, entry_name) == 0){
                 break;
             }
             cur_entry = cur_entry->next;
         }
-        if(strcmp(cur_entry->domain.name, entry) == 0){
+        if(strcmp(cur_entry->domain.name, entry_name) == 0){
             return cur_entry;
         }
         return NULL;
@@ -1009,6 +1041,7 @@ static int add_cache_entry(DnsCacheTable_t* cache, DnsCacheEntry_t* entry){
     }
     else{
         CACHE_DEBUG("ERROR: Fail to add entry %s to hashtable\n", entry->domain.name);
+        return -1;
     }
     CACHE_DEBUG("Cache table size: %lu\n", cache->size);
     return 0;
@@ -1024,15 +1057,55 @@ static DnsCacheEntry_t* get_cache_entry(DnsCacheTable_t* cache, char* entry){
     return get_from_hash_table(cache->hash_table, hash, entry);
 }
 
-static int remove_cache_entry(DnsCacheTable_t* cache, DnsCacheEntry_t* entry){
+static int remove_cache_entry(DnsCacheTable_t* cache, char* entry_name){
     if(cache == NULL) return -1;
-    if(entry == NULL) return -1;
+    if(entry_name == NULL) return -2;
 
+    uint32_t hash = get_string_hash(entry_name, MAX_CACHE_ENTRY);
+    if(remove_from_hash_table(cache->hash_table, hash, entry_name) == 0){
+        cache->size--;
+    }
+    else{
+        CACHE_DEBUG("ERROR: Fail to remove entry %s to hashtable\n", entry_name);
+        return -1;
+    }
+    CACHE_DEBUG("Cache table size: %lu\n", cache->size);
     return 0;
 }
 
-static int get_cache_size (DnsCacheTable_t* cache){
+static void free_cache_table (DnsCacheTable_t* cache){
+    pthread_mutex_unlock (&cache->mutex);
+    pthread_mutex_destroy(&cache->mutex);
+    
+    DnsCacheEntry_t* entry;
+    for(int i = 0; i < MAX_CACHE_ENTRY; ++i){
+        entry = &((DnsCacheEntry_t*)cache->hash_table)[i];
+        if(entry->valid == 1 && entry->next != NULL){
+            
+            DnsCacheEntry_t* next_entry = entry->next;
+            while(entry != NULL){
+                next_entry = entry->next;
+                if(entry != &((DnsCacheEntry_t*)cache->hash_table)[i])
+                    free(entry);
+                entry = next_entry;
+            }
+        }
+    }
+    free(cache->hash_table);
+    cache->size = 0;
+    cache->hash_table = NULL;
+    cache->capacity = 0;
+}
+
+static int get_cache_size(DnsCacheTable_t* cache){
     return cache->size;
 }
 
+static pthread_mutex_t* get_cache_mutex(DnsCacheTable_t* cache){
+    return &cache->mutex;
+}
+
+static void* get_cache_hash_table(DnsCacheTable_t* cache){
+    return cache->hash_table;
+}
 #endif //_PROXY_DNS_H
