@@ -23,6 +23,12 @@ To build your app with current library link pthread library as linker flag:
 -lpthread
 ```
 
+To get access to pthread_rwlock_t type add flag:
+
+```bash
+-std=gnu99
+```
+
 # Build
 To build project use:
 
@@ -172,7 +178,9 @@ pip install pytest psutil
 ```
 
 # Testing
-To run tests execute script run_tests.sh
+To run system tests execute script run_tests.sh
+
+## System testing
 
 Tested with util dig (DNS lookup utility)
 **Test .config file must be named as associated function name in test_proxy-dns.py file**
@@ -350,6 +358,15 @@ Expected output status is NOERROR:
 ```bash
  ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 5306
 ```
+
+
+## Unit testing
+
+To run Unit tests execute script ./run_unit_tests.sh
+Tests consist of:
+- Cache tests
+- Server tests
+
 
 # CONSTRAINS
 - Tested only for Class IN queries
