@@ -11,6 +11,7 @@ PROXY_DNS_DIR = f"{SCRIPT_DIR}/../build"
 PROXY_DNS_APP_PATH = f"{PROXY_DNS_DIR}/{PROXY_DNS_NAME}"
 
 
+
 def start_dig(proxy_ip: str, proxy_port: str, domain) -> str:
     process = Popen(f"dig @{proxy_ip} -p {proxy_port} {domain}", stdout=PIPE, stderr=STDOUT, shell=True)
     stdout, _ = process.communicate()
@@ -36,6 +37,21 @@ def parse_output(output:str, requested_str: str, requested_ip: str = "") -> bool
     
     assert got_answer == True, "Cannot find line with 'Got answer:'"
 
+@pytest.fixture(scope="module")
+def proxy_dns_fixture(request):
+    config_path = request.param
+    print(f"\nRunning proxy-dns with params {request.param}")
+    if config_path is None or config_path == "":
+        assert config_path != ""
+    process = Popen(f"{PROXY_DNS_APP_PATH} {config_path}", stdout=PIPE, stderr=STDOUT, shell=True)
+    
+    assert process.returncode == None, "Fail to execute proxy-dns server"
+
+    yield process
+
+    print(f"\nKilling proxy-dns")
+    kill_process_tree(process.pid)
+
 def start_proxy_dns(config_path: str) -> Popen:
     if config_path is None or config_path == "":
         assert config_path != ""
@@ -54,7 +70,8 @@ def kill_process_tree(pid):
         parent.kill()
     except psutil.NoSuchProcess:
         pass
-
+@pytest.mark.parametrize("proxy_dns_fixture",
+                         [f"{TESTS_DIR}/test_blacklist_refused.config"], indirect=True)
 @pytest.mark.parametrize(
         "domain, result",
         [
@@ -63,12 +80,13 @@ def kill_process_tree(pid):
             ("yandex.ru",   "REFUSED")
         ]
 )
-def test_blacklist_refused(domain, result):
-    process = start_proxy_dns(f"{TESTS_DIR}/{test_blacklist_refused.__name__}.config")
+def test_blacklist_refused(proxy_dns_fixture, domain, result):
+    process = proxy_dns_fixture
     output = start_dig("127.0.0.1", "6969", domain)
     parse_output(output, result)
-    kill_process_tree(process.pid)
 
+@pytest.mark.parametrize("proxy_dns_fixture",
+                         [f"{TESTS_DIR}/test_blacklist_not_found.config"], indirect=True)
 @pytest.mark.parametrize(
         "domain, result",
         [
@@ -77,12 +95,13 @@ def test_blacklist_refused(domain, result):
             ("yandex.ru",   "NXDOMAIN")
         ]
 )
-def test_blacklist_not_found(domain, result):
-    process = start_proxy_dns(f"{TESTS_DIR}/{test_blacklist_not_found.__name__}.config")
+def test_blacklist_not_found(proxy_dns_fixture, domain, result):
+    process = proxy_dns_fixture
     output = start_dig("127.0.0.1", "6969", domain)
     parse_output(output, result)
-    kill_process_tree(process.pid)
 
+@pytest.mark.parametrize("proxy_dns_fixture",
+                         [f"{TESTS_DIR}/test_blacklist_readressing.config"], indirect=True)
 @pytest.mark.parametrize(
         "domain, result, readrr_ip",
         [
@@ -91,72 +110,97 @@ def test_blacklist_not_found(domain, result):
             ("yandex.ru",   "NOERROR", "10.10.10.12")
         ]
 )
-def test_blacklist_readressing(domain, result, readrr_ip):
-    process = start_proxy_dns(f"{TESTS_DIR}/{test_blacklist_readressing.__name__}.config")
+def test_blacklist_readressing(proxy_dns_fixture, domain, result, readrr_ip):
+    process = proxy_dns_fixture
     output = start_dig("127.0.0.1", "6969", domain)
     parse_output(output, result, readrr_ip)
-    kill_process_tree(process.pid)
 
+@pytest.mark.parametrize("proxy_dns_fixture",
+                         [f"{TESTS_DIR}/test_existed_domain.config"], indirect=True)
 @pytest.mark.parametrize(
         "domain, result",
         [
             ("github.com",  "NOERROR"),
         ]
 )
-def test_existed_domain(domain, result):
-    process = start_proxy_dns(f"{TESTS_DIR}/{test_existed_domain.__name__}.config")
+def test_existed_domain(proxy_dns_fixture, domain, result):
+    process = proxy_dns_fixture
     output = start_dig("127.0.0.1", "6969", domain)
     parse_output(output, result)
-    kill_process_tree(process.pid)
 
+@pytest.mark.parametrize("proxy_dns_fixture",
+                         [f"{TESTS_DIR}/test_not_existed_domain.config"], indirect=True)
 @pytest.mark.parametrize(
         "domain, result",
         [
             ("googlerrob.com.123.123",  "NXDOMAIN"),
         ]
 )
-def test_not_existed_domain(domain, result):
-    process = start_proxy_dns(f"{TESTS_DIR}/{test_not_existed_domain.__name__}.config")
+def test_not_existed_domain(proxy_dns_fixture, domain, result):
+    process = proxy_dns_fixture
     output = start_dig("127.0.0.1", "6969", domain)
     parse_output(output, result)
-    kill_process_tree(process.pid)
 
+@pytest.mark.parametrize("proxy_dns_fixture",
+                         [f"{TESTS_DIR}/test_not_existed_upstream.config"], indirect=True)
 @pytest.mark.parametrize(
         "domain, result",
         [
             ("github.com",  "SERVFAIL"),
         ]
 )
-def test_not_existed_upstream(domain, result):
-    process = start_proxy_dns(f"{TESTS_DIR}/{test_not_existed_upstream.__name__}.config")
+def test_not_existed_upstream(proxy_dns_fixture, domain, result):
+    process = proxy_dns_fixture
     output = start_dig("127.0.0.1", "6969", domain)
     parse_output(output, result)
-    kill_process_tree(process.pid)
 
+@pytest.mark.parametrize("proxy_dns_fixture",
+                         [f"{TESTS_DIR}/test_existed_upstream.config"], indirect=True)
 @pytest.mark.parametrize(
         "domain, result",
         [
             ("github.com",  "NOERROR"),
         ]
 )
-def test_existed_upstream(domain, result):
-    process = start_proxy_dns(f"{TESTS_DIR}/{test_existed_upstream.__name__}.config")
+def test_existed_upstream(proxy_dns_fixture, domain, result):
+    process = proxy_dns_fixture
     output = start_dig("127.0.0.1", "6969", domain)
     parse_output(output, result)
-    kill_process_tree(process.pid)
 
+@pytest.mark.parametrize("proxy_dns_fixture",
+                         [f"{TESTS_DIR}/test_correct_queries_with_huge_blacklist.config"], indirect=True)
 @pytest.mark.parametrize(
         "domain, result",
         [
             ("github.com",  "NOERROR"),
         ]
 )
-def test_correct_queries_with_huge_blacklist(domain, result):
-    process = start_proxy_dns(f"{TESTS_DIR}/{test_correct_queries_with_huge_blacklist.__name__}.config")
+def test_correct_queries_with_huge_blacklist(proxy_dns_fixture, domain, result):
+    process = proxy_dns_fixture
     output = start_dig("127.0.0.1", "6969", domain)
     parse_output(output, result)
-    kill_process_tree(process.pid)
 
+
+@pytest.mark.parametrize("proxy_dns_fixture",
+                         [f"{TESTS_DIR}/test_multithread_handling.config"], indirect=True)
+@pytest.mark.parametrize(
+        "domain, result",
+        [
+            ("github.com",      "NOERROR"),
+            ("linkedin.com",    "NOERROR"),
+            ("youtube.com",     "NOERROR"),
+            ("gmail.com",       "NOERROR"),
+            ("wikipedia.org",   "NOERROR"),
+
+        ]
+)
+def test_multithread_handling(proxy_dns_fixture, domain, result):
+    process = proxy_dns_fixture
+    output_list = []
+    for _ in range(10):
+        output_list.append(start_dig("127.0.0.1", "6969", domain))
+    for output in output_list:
+        parse_output(output, result)
 
 if __name__ == "__main__":
     pytest.main(["-v"])
