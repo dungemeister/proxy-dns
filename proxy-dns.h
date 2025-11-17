@@ -206,7 +206,7 @@ typedef struct{
 }WorketArgs_t;
 
 #ifdef DEBUG
-    #define WORKER_DEBUG(format, ...) printf("[WORKER]: " format, ##__VA_ARGS__)
+    #define WORKER_DEBUG(format, ...) printf("[WORKER_%d]: "format, pthread_self(), ##__VA_ARGS__)
     #define CONFIG_PARSER_DEBUG(format, ...) printf("[CONFIG_PARSER]: " format, ##__VA_ARGS__)
     #define CACHE_DEBUG(format, ...) printf("[CACHE_TABLE]: " format, ##__VA_ARGS__)
     #define CACHE_VALIDATOR_DEBUG(format, ...) printf("[CACHE_VALIDATOR]: " format, ##__VA_ARGS__)
