@@ -43,23 +43,22 @@ int main(int argc, char** argv){
     DnsServer_t proxy_server = {0};
     
     //Parse proxy dns config file
-    if((res = parse_config_file(&proxy_server, config_file)) < 0){
+    if((res = pd_parse_config_file(&proxy_server, config_file)) < 0){
         printf("Applying default settings\n");
-        apply_default_config(&proxy_server.conf);
+        pd_apply_default_config(&proxy_server.conf);
         
-        print_config_params(&proxy_server.conf);
     }
 
     //Create dns server
-    if((res = init_dns_server(&proxy_server)) < 0){
+    if((res = pd_init_dns_server(&proxy_server)) < 0){
         return res;
     }
     
     //Serve forever
-    serve_proxy_dns(&proxy_server);
+    pd_start_serving(&proxy_server);
 
     //Clear resources
-    proxy_dns_shutdown(&proxy_server);
+    pd_free_server(&proxy_server);
 
     return 0;
 }
