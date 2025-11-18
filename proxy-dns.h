@@ -12,6 +12,7 @@
 #include <sys/time.h>
 #include <assert.h>
 #include <pthread.h>
+#include <errno.h>
 
 #define CONFIG_LOCAL_IP                 ("127.0.0.1")
 #define CONFIG_LOCAL_PORT               (6969)
@@ -25,6 +26,8 @@
 #define MAX_BLACKLIST_DOMAINS           (100)
 #define BLACKLIST_TYPE_REFUSE_CHAR      ("refuse")
 #define BLACKLIST_TYPE_NOT_FOUND_CHAR   ("not_found")
+
+#define MAX_WORKER_THREADS_SIZE (100)
 
 #define DNS_HEADER_FLAGS_QR_OFFSET      (15)
 #define DNS_HEADER_FLAGS_OPCODE_OFFSET  (11)
@@ -133,12 +136,6 @@ typedef struct{
     bool active;
 }DnsCacheTable_t;
 
-typedef struct {
-    DnsServerConfig_t   conf;
-    DnsCacheTable_t     cache;
-    int                 sock_fd;
-}DnsServer_t;
-
 #pragma pack(push, 1)
 typedef struct {
     uint16_t id;
@@ -183,9 +180,6 @@ typedef enum{
 #define DNS_QUESTION_SECTION_OFFSET (sizeof(DnsQueryHeader_t))
 #define DNS_HEADER_SECTION_SIZE     DNS_QUESTION_SECTION_OFFSET
 
-
-#define MAX_THREADS_SIZE (100)
-
 typedef struct{
     struct client_data{
         struct sockaddr_in client_addr;
@@ -193,25 +187,40 @@ typedef struct{
         int client_sockfd;
         char buffer[CLIENT_BUFFER_SIZE];
         int data_len;
-    }tasks[MAX_THREADS_SIZE];
+    }tasks[MAX_WORKER_THREADS_SIZE];
 
     pthread_mutex_t mutex;
     pthread_cond_t cond;
     int front, rear, count;
+    int shutdown;
 }TaskQueue_t;
 
+typedef struct {
+    DnsServerConfig_t       conf;
+    DnsCacheTable_t         cache;
+    TaskQueue_t             queue;
+    int                     sock_fd;
+    pthread_t               threads[MAX_WORKER_THREADS_SIZE];
+    size_t                  thread_size;
+    pthread_t               cache_cleaner;
+    volatile int            active;
+}DnsServer_t;
+
 typedef struct{
-    TaskQueue_t* queue;
     DnsServer_t* server;
 }WorketArgs_t;
 
 #ifdef DEBUG
-    #define WORKER_DEBUG(format, ...) printf("[WORKER_%d]: "format, pthread_self(), ##__VA_ARGS__)
+    #define SERVER_DEBUG(format, ...) printf("[SERVER_%ld]: "format, pthread_self(), ##__VA_ARGS__)
+    #define QUEUE_DEBUG(format, ...) printf("[QUEUE_%ld]: "format, pthread_self(), ##__VA_ARGS__)
+    #define WORKER_DEBUG(format, ...) printf("[WORKER_%ld]: "format, pthread_self(), ##__VA_ARGS__)
     #define CONFIG_PARSER_DEBUG(format, ...) printf("[CONFIG_PARSER]: " format, ##__VA_ARGS__)
     #define CACHE_DEBUG(format, ...) printf("[CACHE_TABLE]: " format, ##__VA_ARGS__)
     #define CACHE_VALIDATOR_DEBUG(format, ...) printf("[CACHE_VALIDATOR]: " format, ##__VA_ARGS__)
 #else
-    #define WORKER_DEBUG(format, ...) 
+    #define SERVER_DEBUG(format, ...)
+    #define QUEUE_DEBUG(format, ...)
+    #define WORKER_DEBUG(format, ...)
     #define CONFIG_PARSER_DEBUG(format, ...) 
     #define CACHE_DEBUG(format, ...)
     #define CACHE_VALIDATOR_DEBUG(format, ...) 
@@ -221,40 +230,267 @@ typedef struct{
 #define WORKER_ERROR_MSG(msg) perror("[WORKER]: "msg)
 
 //Declaration functions as API
-static int  parse_config_file   (DnsServer_t* server, const char* config_file);
-static int  init_dns_server     (DnsServer_t* server);
-static void serve_proxy_dns     (DnsServer_t* server);
-static void proxy_dns_shutdown  (DnsServer_t* server);
-//Declaration internal dunctions
-static void add_domain_to_blacklist (DomainList_t* blacklist, char* domain, BlacklistDomainType_t type, uint32_t redirect_ip);
-static bool is_domain_blacklisted   (DomainList_t* blacklist, char* domain);
+static int  pd_parse_config_file   (DnsServer_t* server, const char* config_file);
+static int  pd_init_dns_server     (DnsServer_t* server);
+static void pd_start_serving       (DnsServer_t* server);
+static void pd_stop_serving        (DnsServer_t* server);
+static void pd_free_server         (DnsServer_t* server);
+static void pd_apply_default_config(DnsServerConfig_t* conf);
 
+//Declaration of internal functions
+//Domains blacklist handling
+static void                     add_domain_to_blacklist     (DomainList_t* blacklist, char* domain, BlacklistDomainType_t type, uint32_t redirect_ip);
+static bool                     is_domain_blacklisted       (DomainList_t* blacklist, char* domain);
+static BlacklistDomainType_t    get_domain_type_from_string (char* type);
+
+static void print_config_params     (DnsServerConfig_t* conf);
 static int  create_dns_socket   (uint32_t addr, int port);
-
 static void     trim_whitespace (char *str);
 static uint32_t ip_to_uint32    (const char* ip_address_str);
-
+//Parsing/building packets
 static DnsQueryHeader_t parse_header_section    (char* buffer);
 static int              parse_question_section  (char* buffer, char* domain);
 static void             build_client_response   (char *buffer, int *len, char *query, BlacklistDomain_t type);
 static void             build_fail_response     (char *buffer, int *len, char *query, CustomResponse_t domain);
 static int              forward_to_upstream     (char* query, int query_len, char* response, int response_buf_size, DnsServer_t* server);
-
-static void                 init_queue              (TaskQueue_t* queue);
-static void                 run_pthread_pool        (pthread_t* threads, size_t threads_size, void*(*func)(void*), WorketArgs_t* args);
+//Tasks for queue and main thread
+static int                  init_queue              (TaskQueue_t* queue);
 static void                 enqueue_task            (TaskQueue_t* queue, struct client_data task);
 static struct client_data   dequeue_task            (TaskQueue_t* queue);
-static void*                thread_worker           (void* arg);
-static void*                thread_cache_validator  (void *arg);
-
+static int                  get_queue_count         (TaskQueue_t* queue);
+static void                 shutdown_queue          (TaskQueue_t* queue);
+static void                 free_queue              (TaskQueue_t* queue);
+//Cache table
 static int              init_cache_table            (DnsCacheTable_t* cache);
 static void             free_cache_table            (DnsCacheTable_t* cache);
 static int              add_cache_entry             (DnsCacheTable_t* cache, DnsCacheEntry_t* entry);
 static DnsCacheEntry_t* get_cache_entry             (DnsCacheTable_t* cache, char* entry);
 static int              remove_cache_entry          (DnsCacheTable_t* cache, char* entry);
 static int              get_cache_size              (DnsCacheTable_t* cache);
-//Implementation
+//Multithreading workers
+static void                 run_workers_pool        (DnsServer_t* server, void*(*func)(void*), WorketArgs_t* args);
+static void*                thread_worker           (void* arg);
+static void*                thread_cache_validator  (void *arg);
 
+//API functions implementation
+static int pd_parse_config_file(DnsServer_t* server, const char* config_file){
+    if(config_file == NULL) return -1;
+
+    FILE* cf = fopen(config_file, "r");
+    if(cf == NULL){
+        CONFIG_PARSER_DEBUG("Fail to open config file '%s'\n", config_file);
+        return -1;
+    }
+
+    char line[LINE_BUFFER_SIZE];
+    int line_number = 0;
+
+    while(fgets(line, LINE_BUFFER_SIZE, cf)){
+        line_number++;
+        if(line[strlen(line) - 1] == '\n')
+            line[strlen(line) - 1] = '\0';
+
+        char *token = strtok(line, " \t");
+        
+        while (token != NULL) {
+            if(strstr(token, "upstream-dns:") != NULL)
+            {
+                token = strtok(NULL, " \t");
+                trim_whitespace(token);
+                char* params = strtok(token, ":");
+                char* ip = params;
+                params = strtok(NULL, " :");
+                char* port = params;
+
+                assert(port != NULL && "Fail to parse upstream-dns port param");
+                assert(ip != NULL   && "Fail to parse upstream-dns ip param");
+
+                trim_whitespace(ip);
+                server->conf.upstream_ip = ip_to_uint32(ip);
+                trim_whitespace(port);
+                server->conf.upstream_port = atoi(port);
+            }
+            else if(strstr(token, "blacklist:") != NULL)
+            {
+                char* tokens[MAX_BLACKLIST_DOMAINS];
+                int size = 0;
+                while(token != NULL && size < MAX_BLACKLIST_DOMAINS){
+                    token = strtok(NULL, " \t");
+                    if(token){
+                        tokens[size] = token;
+                        token = tokens[size];
+                        size++;
+                    }
+                }
+                for(int i = 0; i < size; i++){
+                                        
+                    char *domain = strtok(tokens[i], "-");
+                    char *action_or_ip = strtok(NULL, "-");
+
+                    uint32_t redirect_ip = 0x0;
+                    BlacklistDomainType_t type = get_domain_type_from_string(action_or_ip);
+                    if(type == BLACKLIST_DOMAIN_TYPE_REDIRECT) redirect_ip = ip_to_uint32(action_or_ip);
+                        
+                    add_domain_to_blacklist(&server->conf.blacklist, domain, type, redirect_ip);
+                    CONFIG_PARSER_DEBUG("Added to blacklist: %s-%s\n", domain, action_or_ip);
+
+                }
+            }
+            else if(strstr(token, "local-dns:") != NULL)
+            {
+                token = strtok(NULL, " \t");
+                char* params = strtok(token, ":");
+                char* ip = params;
+                params = strtok(NULL, " :");
+                char* port = params;
+
+                assert(port != NULL && "Fail to parse local-dns port param");
+                assert(ip != NULL && "Fail to parse local-dns ip param");
+
+                trim_whitespace(ip);
+                server->conf.local_ip = ip_to_uint32(ip);
+                trim_whitespace(port);
+                server->conf.local_port = atoi(port);
+
+            }
+            token = strtok(NULL, " \t");
+        }
+    }
+    print_config_params(&server->conf);
+    return 0;
+}
+
+static int pd_init_dns_server(DnsServer_t* server){
+    server->active = true;
+    DnsServerConfig_t* conf = &(server->conf);
+    if((server->sock_fd = create_dns_socket(conf->local_ip, conf->local_port)) < 0){
+        return -1;
+    }
+
+    if(init_cache_table(&server->cache) != 0){
+        return -1;
+    }
+
+    if(init_queue(&server->queue) != 0){
+        return -1;
+    }
+    return 0;
+}
+
+static void pd_apply_default_config(DnsServerConfig_t* conf){
+    conf->local_ip      = ip_to_uint32(CONFIG_LOCAL_IP);
+    conf->local_port    = CONFIG_LOCAL_PORT;
+    conf->upstream_ip   = ip_to_uint32(CONFIG_UPSTREAM_IP);
+    conf->upstream_port = CONFIG_UPSTREAM_PORT;
+    memset(&conf->blacklist, 0x0, sizeof(DomainList_t));
+
+    print_config_params(conf);
+}
+
+static void handle_server_connection(DnsServer_t* server){
+    char recv_buffer[CLIENT_BUFFER_SIZE];
+    TaskQueue_t* queue = &server->queue;
+
+    while(server->active){
+        fd_set read_fds;
+        struct timeval timeout;
+        
+        FD_ZERO(&read_fds);
+        FD_SET(server->sock_fd, &read_fds);
+        timeout.tv_sec = 1;
+        timeout.tv_usec = 0;
+        
+        int ready = select(server->sock_fd + 1, &read_fds, NULL, NULL, &timeout);
+        SERVER_DEBUG("select timeout. ready: %d\n", ready);
+        if (ready < 0) {
+            if (errno != EINTR) {
+                perror("select failed");
+            }
+            continue;
+        }
+        if (ready > 0 && FD_ISSET(server->sock_fd, &read_fds)) {
+            struct sockaddr_in client_addr;
+            socklen_t client_len = sizeof(client_addr);
+            int client_sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+            int reuse_addr = 1;
+            setsockopt(client_sockfd, SOL_SOCKET, SO_REUSEADDR, &reuse_addr, sizeof(reuse_addr));
+
+            if(client_sockfd < 0) {
+                SERVER_ERROR_MSG("Client socket creation failed");
+                break;
+            }
+
+            int recv_len = recvfrom(server->sock_fd, recv_buffer, sizeof(recv_buffer), 0,
+                                (struct sockaddr*)&client_addr, &client_len);
+
+            if(recv_len <= 0){
+                close(client_sockfd);
+                continue;
+            }
+            struct sockaddr_in temp_addr;
+            socklen_t temp_len = sizeof(temp_addr);
+            temp_addr.sin_addr.s_addr = INADDR_ANY;
+            temp_addr.sin_family = AF_INET;
+            temp_addr.sin_port = htons(0);
+
+            if(bind(client_sockfd, (struct sockaddr*)&temp_addr, temp_len) == 0){
+
+                struct client_data task;
+                task.client_addr = client_addr;
+                task.client_len = client_len;
+                task.client_sockfd = client_sockfd;
+                task.data_len = recv_len;
+                memmove(task.buffer, recv_buffer, sizeof(recv_buffer));
+
+                enqueue_task(queue, task);
+            }
+            else{
+                SERVER_ERROR_MSG("Fail to bind socket to client addr");
+                close(client_sockfd);
+                sleep(1);
+            }
+        }
+    }
+}
+
+static void pd_start_serving(DnsServer_t* server){
+    size_t server_thread_size = 10;
+    server->thread_size = server_thread_size;
+
+    WorketArgs_t args = {0};
+    args.server = server;
+    
+    run_workers_pool(server, thread_worker, &args);
+    pthread_create(&server->cache_cleaner, NULL, thread_cache_validator, (void*)&server->cache);
+
+    server->active = true;
+
+    //Wait server to deactivate
+    handle_server_connection(server);
+    
+}
+
+static void pd_stop_serving(DnsServer_t* server){
+    server->active = false;
+    server->cache.active = false;
+    shutdown_queue(&server->queue);
+    pthread_join(server->cache_cleaner, NULL);
+    for(int i = 0; i < server->thread_size; i++){
+        pthread_join(server->threads[i], NULL);
+    }
+}
+
+static void pd_free_server(DnsServer_t* server){
+    //TODO: add worker threads clearing
+    if(server->sock_fd >= 0){
+        close(server->sock_fd);
+    }
+    
+    free_cache_table(&server->cache);
+    free_queue(&server->queue);
+}
+
+//Internal functions implementation
 static inline void print_config_local_dns_help(){
     CONFIG_PARSER_DEBUG("Usage:\n\tlocal-dns: 127.0.0.1:6969\nSpace between tokens is necessary");
 }
@@ -268,13 +504,6 @@ static void print_config_params(DnsServerConfig_t* conf){
 
     ip.s_addr = htonl(conf->upstream_ip);
     CONFIG_PARSER_DEBUG("Upstream DNS: %s:%d\n", inet_ntoa(ip), conf->upstream_port);
-}
-
-static void apply_default_config(DnsServerConfig_t* conf){
-    conf->local_ip      = ip_to_uint32(CONFIG_LOCAL_IP);
-    conf->local_port    = CONFIG_LOCAL_PORT;
-    conf->upstream_ip   = ip_to_uint32(CONFIG_UPSTREAM_IP);
-    conf->upstream_port = CONFIG_UPSTREAM_PORT;
 }
 
 static void add_domain_to_blacklist(DomainList_t* blacklist, char* domain, BlacklistDomainType_t type, uint32_t redirect_ip){
@@ -382,105 +611,6 @@ static BlacklistDomainType_t get_domain_type_from_string(char* type){
         return BLACKLIST_DOMAIN_TYPE_REDIRECT;
     }
     return BLACKLIST_DOMAIN_TYPE_NOT_BLACKLISTED;
-}
-
-static int parse_config_file(DnsServer_t* server, const char* config_file){
-    if(config_file == NULL) return -1;
-
-    FILE* cf = fopen(config_file, "r");
-    if(cf == NULL){
-        CONFIG_PARSER_DEBUG("Fail to open config file '%s'\n", config_file);
-        return -1;
-    }
-
-    char line[LINE_BUFFER_SIZE];
-    int line_number = 0;
-
-    while(fgets(line, LINE_BUFFER_SIZE, cf)){
-        line_number++;
-        if(line[strlen(line) - 1] == '\n')
-            line[strlen(line) - 1] = '\0';
-
-        char *token = strtok(line, " \t");
-        
-        while (token != NULL) {
-            if(strstr(token, "upstream-dns:") != NULL)
-            {
-                token = strtok(NULL, " \t");
-                trim_whitespace(token);
-                char* params = strtok(token, ":");
-                char* ip = params;
-                params = strtok(NULL, " :");
-                char* port = params;
-
-                assert(port != NULL && "Fail to parse upstream-dns port param");
-                assert(ip != NULL   && "Fail to parse upstream-dns ip param");
-
-                trim_whitespace(ip);
-                server->conf.upstream_ip = ip_to_uint32(ip);
-                trim_whitespace(port);
-                server->conf.upstream_port = atoi(port);
-            }
-            else if(strstr(token, "blacklist:") != NULL)
-            {
-                char* tokens[MAX_BLACKLIST_DOMAINS];
-                int size = 0;
-                while(token != NULL && size < MAX_BLACKLIST_DOMAINS){
-                    token = strtok(NULL, " \t");
-                    if(token){
-                        tokens[size] = token;
-                        token = tokens[size];
-                        size++;
-                    }
-                }
-                for(int i = 0; i < size; i++){
-                                        
-                    char *domain = strtok(tokens[i], "-");
-                    char *action_or_ip = strtok(NULL, "-");
-
-                    uint32_t redirect_ip = 0x0;
-                    BlacklistDomainType_t type = get_domain_type_from_string(action_or_ip);
-                    if(type == BLACKLIST_DOMAIN_TYPE_REDIRECT) redirect_ip = ip_to_uint32(action_or_ip);
-                        
-                    add_domain_to_blacklist(&server->conf.blacklist, domain, type, redirect_ip);
-                    CONFIG_PARSER_DEBUG("Added to blacklist: %s-%s\n", domain, action_or_ip);
-
-                }
-            }
-            else if(strstr(token, "local-dns:") != NULL)
-            {
-                token = strtok(NULL, " \t");
-                char* params = strtok(token, ":");
-                char* ip = params;
-                params = strtok(NULL, " :");
-                char* port = params;
-
-                assert(port != NULL && "Fail to parse local-dns port param");
-                assert(ip != NULL && "Fail to parse local-dns ip param");
-
-                trim_whitespace(ip);
-                server->conf.local_ip = ip_to_uint32(ip);
-                trim_whitespace(port);
-                server->conf.local_port = atoi(port);
-
-            }
-            token = strtok(NULL, " \t");
-        }
-    }
-    print_config_params(&server->conf);
-    return 0;
-}
-
-static int init_dns_server(DnsServer_t* server){
-    DnsServerConfig_t* conf = &(server->conf);
-    if((server->sock_fd = create_dns_socket(conf->local_ip, conf->local_port)) < 0){
-        return -1;
-    }
-
-    if(init_cache_table(&server->cache) != 0){
-        return -1;
-    }
-    return 0;
 }
 
 static int get_qname_from_section_start(char* src_buffer, char* name_buf){
@@ -693,74 +823,6 @@ static void build_fail_response(char *buffer, int *len, char *query, CustomRespo
            *len - sizeof(DnsQueryHeader_t));
 }
 
-static void serve_proxy_dns(DnsServer_t* server){
-    char recv_buffer[CLIENT_BUFFER_SIZE];
-    
-    pthread_t threads[MAX_THREADS_SIZE];
-    pthread_t cache_cleaner;
-    TaskQueue_t queue;
-    init_queue(&queue);
-
-    WorketArgs_t args = {0};
-    args.queue = &queue;
-    args.server = server;
-    run_pthread_pool(threads, 10, thread_worker, &args);
-    
-    pthread_create(&cache_cleaner, NULL, thread_cache_validator, (void*)&server->cache);
-
-    while(1){
-        struct sockaddr_in client_addr;
-        socklen_t client_len = sizeof(client_addr);
-        int client_sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-        int reuse_addr = 1;
-        setsockopt(client_sockfd, SOL_SOCKET, SO_REUSEADDR, &reuse_addr, sizeof(reuse_addr));
-
-        if(client_sockfd < 0) {
-            SERVER_ERROR_MSG("Client socket creation failed");
-            break;
-        }
-
-        int recv_len = recvfrom(server->sock_fd, recv_buffer, sizeof(recv_buffer), 0,
-                               (struct sockaddr*)&client_addr, &client_len);
-
-        if(recv_len <= 0){
-            close(client_sockfd);
-            continue;
-        }
-        struct sockaddr_in temp_addr;
-        socklen_t temp_len = sizeof(temp_addr);
-        temp_addr.sin_addr.s_addr = INADDR_ANY;
-        temp_addr.sin_family = AF_INET;
-        temp_addr.sin_port = htons(0);
-
-        if(bind(client_sockfd, (struct sockaddr*)&temp_addr, temp_len) == 0){
-
-            struct client_data task;
-            task.client_addr = client_addr;
-            task.client_len = client_len;
-            task.client_sockfd = client_sockfd;
-            task.data_len = recv_len;
-            memmove(task.buffer, recv_buffer, sizeof(recv_buffer));
-
-            enqueue_task(&queue, task);
-        }
-        else{
-            SERVER_ERROR_MSG("Fail to bind socket to client addr");
-            close(client_sockfd);
-            sleep(1);
-        }
-    }
-}
-
-static void proxy_dns_shutdown(DnsServer_t* server){
-    //TODO: add worker threads clearing
-    if(server->sock_fd >= 0){
-        close(server->sock_fd);
-    }
-    
-    free_cache_table(&server->cache);
-}
-
 static int create_dns_socket(uint32_t addr, int port) {
     int sock_fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock_fd < 0) {
@@ -790,33 +852,52 @@ static int create_dns_socket(uint32_t addr, int port) {
     return sock_fd;
 }
 
-static void init_queue(TaskQueue_t* queue){
+static int init_queue(TaskQueue_t* queue){
     queue->count = 0;
     queue->front = 0;
     queue->rear = 0;
+    queue->shutdown = 0;
     pthread_mutex_init(&queue->mutex, NULL);
     pthread_cond_init(&queue->cond, NULL);
 
+    return 0;
+}
+
+static void shutdown_queue(TaskQueue_t* queue){
+    queue->shutdown = 1;
+    pthread_cond_broadcast(&queue->cond);
+}
+
+static void free_queue(TaskQueue_t* queue){
+    if(!queue->shutdown){
+        shutdown_queue(queue);
+    }
+    pthread_mutex_destroy(&queue->mutex);
+    pthread_cond_destroy(&queue->cond);
 }
 
 static void enqueue_task(TaskQueue_t* queue, struct client_data task){
     pthread_mutex_lock(&queue->mutex);
     queue->tasks[queue->rear] = task;
-    queue->rear = (queue->rear + 1) % MAX_THREADS_SIZE;
+    queue->rear = (queue->rear + 1) % MAX_WORKER_THREADS_SIZE;
     queue->count++;
     pthread_cond_signal(&queue->cond);
     pthread_mutex_unlock(&queue->mutex);
+    QUEUE_DEBUG("Task enqueued\n");
 }
 
 static struct client_data dequeue_task(TaskQueue_t* queue){
+    if(queue->shutdown == 1)
+        return (struct client_data){0};
 
     pthread_mutex_lock(&queue->mutex);
     if(queue->count == 0)
         pthread_cond_wait(&queue->cond, &queue->mutex);
 
+    QUEUE_DEBUG("Task dequeued\n");
     struct client_data task = {0};
     task = queue->tasks[queue->front];
-    queue->front = (queue->front + 1) % MAX_THREADS_SIZE;
+    queue->front = (queue->front + 1) % MAX_WORKER_THREADS_SIZE;
     queue->count--;
 
     pthread_mutex_unlock(&queue->mutex);
@@ -824,16 +905,21 @@ static struct client_data dequeue_task(TaskQueue_t* queue){
     return task;
 }
 
+static int get_queue_count(TaskQueue_t* queue){
+    return queue->count;
+}
+
 static void* thread_worker(void* arg){
     WorketArgs_t* worket_args = (WorketArgs_t*)arg;
-    TaskQueue_t* queue = worket_args->queue;
     DnsServer_t* server = worket_args->server;
+    TaskQueue_t* queue = &server->queue;
 
     // printf("Start worker. Queue: %p Server: %p\n", (void*)queue, (void*)server);
     char domain_name_buffer[DOMAIN_NAME_BUFFER_SIZE] = {0};
     char upstream_response[CLIENT_BUFFER_SIZE] = {0};
 
-    while(1){
+    WORKER_DEBUG("Start worker\n");
+    while(server->active){
         struct client_data task = dequeue_task(queue);
         if(task.client_sockfd <= 0) continue;
 
@@ -930,15 +1016,16 @@ static void* thread_worker(void* arg){
 
         close(task.client_sockfd);
     }
+    WORKER_DEBUG("Stop worker\n");
+
     return NULL;
 }
 
-static void run_pthread_pool(pthread_t* threads, size_t threads_size, void*(*func)(void*), WorketArgs_t* args){
-    int qty = (threads_size > MAX_THREADS_SIZE)? MAX_THREADS_SIZE : threads_size;
-    for(int i = 0; i < qty; i++){
+static void run_workers_pool(DnsServer_t* server, void*(*func)(void*), WorketArgs_t* args){
+    for(size_t i = 0; i < server->thread_size; i++){
         pthread_attr_t attr;
         pthread_attr_init(&attr);
-        if(pthread_create(&threads[i], &attr, func, args) != 0){
+        if(pthread_create(&server->threads[i], &attr, func, args) != 0){
             SERVER_ERROR_MSG("Fail to create pthread");
         }
     }
