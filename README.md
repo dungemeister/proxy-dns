@@ -68,6 +68,7 @@ To Launch with desired config file run with arg:
 
 # Library usage
 File main.c demonstrates basic use of the library.
+**All API functions contain prefix pd_**. Other function used for internal actions/calculations
 
 1. It allocates DnsServer structure and config file string.
 
@@ -84,8 +85,8 @@ DnsServer_t proxy_server = {};
 ```c
 // int main()
 // ...
-if((res = parse_config_file(&proxy_server, config_file)) < 0){
-    apply_default_config(&proxy_server.conf);
+if((res = pd_parse_config_file(&proxy_server, config_file)) < 0){
+    pd_apply_default_config(&proxy_server.conf);
 }
 ```
 3. Server initialization
@@ -93,7 +94,7 @@ if((res = parse_config_file(&proxy_server, config_file)) < 0){
 ```c
 // int main()
 // ...
-if((res = init_dns_server(&proxy_server)) < 0){
+if((res = pd_init_dns_server(&proxy_server)) < 0){
     return res;
 }
 ```
@@ -103,14 +104,14 @@ if((res = init_dns_server(&proxy_server)) < 0){
 ```c
 // int main()
 // ...
-serve_proxy_dns(&proxy_server);
+pd_start_serving(&proxy_server);
 ```
 5. Clearing resources
 
 ```c
 // int main()
 // ...
-proxy_dns_shutdown(&proxy_server);
+pd_free_server(&proxy_server);
 ```
 
 # Config constrains
