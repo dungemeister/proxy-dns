@@ -272,6 +272,8 @@ static void                 run_workers_pool        (DnsServer_t* server, void*(
 static void*                thread_worker           (void* arg);
 static void*                thread_cache_validator  (void *arg);
 
+#ifdef PROXY_DNS_IMPLEMENTATION
+
 //API functions implementation
 static int pd_parse_config_file(DnsServer_t* server, const char* config_file){
     if(config_file == NULL) return -1;
@@ -1244,4 +1246,5 @@ static void* thread_cache_validator(void *arg) {
     }
     return NULL;
 }
+#endif// PROXY_DNS_IMPLEMENTATION
 #endif //_PROXY_DNS_H

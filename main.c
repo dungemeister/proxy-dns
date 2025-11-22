@@ -1,5 +1,8 @@
 #include <stdio.h>
+
+#define PROXY_DNS_IMPLEMENTATION
 #include "proxy-dns.h"
+
 #include <signal.h>
 
 #define ARG_SHIFT(argc, arg) (--(*(argc)) > 0 ? ((arg)++)[0] : (arg)[0])

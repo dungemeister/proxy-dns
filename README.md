@@ -70,11 +70,21 @@ To Launch with desired config file run with arg:
 File main.c demonstrates basic use of the library.
 **All API functions contain prefix pd_**. Other function used for internal actions/calculations
 
+0. To include library use default for header only libraries approach with defining
+preprocessor variable. Without defining PROXY_DNS_IMPLEMENTATION accessed only declarations 
+
+```c
+#define PROXY_DNS_IMPLEMENTATION
+#include "proxy-dns.h"
+
+```
+
 1. It allocates DnsServer structure and config file string.
 
 ```c
 //main.c
-#include "proxy-dns.h"
+
+
 const char* config_file = "proxy.config";
 // int main()
 DnsServer_t proxy_server = {};
